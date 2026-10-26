@@ -105,15 +105,20 @@ export function RepoGate({
             </button>
           ) : null}
 
+          {/* 示例库永远给一个入口：不选文件夹也要能立刻上手 */}
+          <button
+            type="button"
+            onClick={onMemory}
+            disabled={busy}
+            className="h-10 rounded-lg border border-line text-[13px] text-ink-2 transition-colors hover:bg-surface-2 disabled:opacity-50"
+          >
+            打开示例库　<span className="text-ink-3">（暂存，不在磁盘上）</span>
+          </button>
+
           {!canPick ? (
-            <button
-              type="button"
-              onClick={onMemory}
-              disabled={busy}
-              className="h-10 rounded-lg border border-line text-[13px] text-ink-2 transition-colors hover:bg-surface-2 disabled:opacity-50"
-            >
-              先存在浏览器里　<span className="text-ink-3">（不在磁盘上）</span>
-            </button>
+            <p className="px-1 text-[11.5px] leading-relaxed text-ink-3">
+              示例库可以直接写，但关掉浏览器就没了。要真的存到磁盘，换 Chrome / Edge 选文件夹。
+            </p>
           ) : null}
         </div>
 
