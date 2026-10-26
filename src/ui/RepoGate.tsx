@@ -2,6 +2,8 @@ type Props = {
   canPick: boolean
   isDesktop: boolean
   busy: boolean
+  /** 打开到哪一步了（选文件夹 / 读取中）。null = 没在打开 */
+  stage: string | null
   error: string | null
   /** 上次用的仓库。有它就把"打开 xxx"做成主按钮，而不是单独再开一屏 */
   pending: { label: string } | null
@@ -22,6 +24,7 @@ export function RepoGate({
   canPick,
   isDesktop,
   busy,
+  stage,
   error,
   pending,
   onPick,
@@ -122,6 +125,15 @@ export function RepoGate({
           ) : null}
         </div>
 
+        {stage ? (
+          <p className="mt-3 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-ink-2">
+            <span className="size-1.5 animate-pulse rounded-full bg-green" />
+            {stage}
+          </p>
+        ) : null}
+
+        <EnvLine />
+
         {error ? (
           <div
             role="alert"
@@ -136,5 +148,28 @@ export function RepoGate({
         ) : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * 环境自检：不解释原理，只说这台浏览器到底给不给两样东西。
+ * 选不了文件夹时，这一行能立刻分清"程序坏了"还是"环境不给"。
+ */
+function EnvLine() {
+  const picker = typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  let storage = false
+  try {
+    localStorage.setItem('dusk.probe', '1')
+    localStorage.removeItem('dusk.probe')
+    storage = true
+  } catch {
+    storage = false
+  }
+
+  return (
+    <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
+      环境：{picker ? '支持目录选择' : '不支持目录选择（要 Chrome / Edge）'}
+      {storage ? ' · 可记住仓库' : ' · 记不住仓库（存储被禁，不影响本次打开）'}
+    </p>
   )
 }

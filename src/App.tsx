@@ -216,6 +216,8 @@ export function App() {
   /** 上次读到的 `.zzq` 原文。写回时以它为底合并，别把不认识的字段冲掉 */
   const vaultRaw = useRef('')
   const [gateBusy, setGateBusy] = useState(false)
+  /** 打开仓库卡在哪一步 —— 界面上要能看见，不能只是"没反应" */
+  const [openStage, setOpenStage] = useState<string | null>(null)
   const [working, setWorking] = useState<string | null>(null)
   const [vaults, setVaults] = useState<VaultEntry[]>(() => listVaults())
 
@@ -395,15 +397,26 @@ export function App() {
 
   async function chooseFolder() {
     setGateBusy(true)
+    setOpenStage('正在等你选文件夹…')
     try {
       const opened = await pickRepo()
-      if (!opened) return
-      saveRef(opened.ref)
+      if (!opened) {
+        setOpenStage(null)
+        return
+      }
+      setOpenStage(`已选择「${opened.host.label}」，正在读取…`)
+      // 记不住仓库引用（localStorage 被禁）不该挡住打开
+      try {
+        saveRef(opened.ref)
+      } catch (e) {
+        console.warn('[dusk] 记不住仓库引用（localStorage 不可用）', e)
+      }
       await adopt(opened.host, opened.ref)
     } catch (e) {
       console.error('[dusk] 打开仓库失败', e)
       setPhase({ t: 'gate', error: errText(e), pending: null })
     } finally {
+      setOpenStage(null)
       setGateBusy(false)
     }
   }
@@ -775,6 +788,7 @@ export function App() {
           canPick={canPickFolder()}
           isDesktop={isTauri()}
           busy={gateBusy}
+          stage={openStage}
           error={phase.error}
           pending={pending ? { label: pending.label } : null}
           onPick={() => void chooseFolder()}
