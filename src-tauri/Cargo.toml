@@ -1,0 +1,32 @@
+[package]
+name = "dusk-depot"
+version = "0.1.0"
+description = "Dusk Depot —— 你的文件夹就是笔记库"
+authors = ["baicaibucai1"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+# 有两个 bin：主程序 dusk-depot，和验收脚本 pathcheck。默认跑主程序。
+default-run = "dusk-depot"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+# ⚠️ 这里只要 rlib：桌面端的 bin 就是静态链接它。
+#    模板默认给的 staticlib / cdylib 是给**移动端**用的，而在 Windows GNU 目标上
+#    带着 cdylib 跑 `cargo test` 会撞 "export ordinal too large"（DLL 导出表超 65535），
+#    链接直接失败。等真要出 Android 包时再把那两个加回来。
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.4", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"

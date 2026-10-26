@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+.vite/
+
+# 验证用的截图，不进版本库
+assets/shots/
+
+# 本机的凭据与临时件，永不进版本库
+.env
+.env.*
+!.env.example
+*.local
+
+.DS_Store
+Thumbs.db
+
+# 桌面壳的构建产物
+src-tauri/target/
+src-tauri/gen/
+
+# 本机 agent 的工作记录，不进版本库
+.workbuddy/

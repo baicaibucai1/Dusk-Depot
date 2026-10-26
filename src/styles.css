@@ -1,0 +1,699 @@
+@import 'tailwindcss';
+
+/*
+ * 令牌全在这一块。组件里只写语义名（text-ink / bg-surface / border-line），
+ * 不写裸 hex —— 配色只有一个来源，换色才只改一处。
+ *
+ * 这一套是跟着图标定的：绿 + 白，绿色只做强调，不做大面积底色。
+ */
+@theme {
+  --color-paper: #f5f7f6;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef1ef;
+  --color-line: #e3e7e5;
+
+  --color-ink: #10231c;
+  --color-ink-2: #4a5a53;
+  --color-ink-3: #8b9a93;
+
+  --color-green: #0e9b66;
+  --color-green-bright: #2acb95;
+  --color-green-deep: #054e38;
+  --color-green-soft: #e9f7f0;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * 链接自带下划线。绿色（#0e9b66）和墨色（#10231c）在浅底上靠颜色区分不够，
+   * 下划线才是那个记号 —— 这条别改成靠颜色。
+   */
+  a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-green-soft);
+    color: var(--color-green-deep);
+  }
+
+  /* 细滚动条：跟这套"几乎不用装饰"的语言一致，别用系统默认那条粗的 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(139, 154, 147, 0.4) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(139, 154, 147, 0.4);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 99px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 154, 147, 0.65);
+    background-clip: padding-box;
+  }
+}
+
+/* ── 渲染个性化：这些变量由「设置」面板写入（见 ui/settings.ts） ──
+ * 阅读模式和编写模式都读同一批变量，调一次两边一起变。
+ * 这里的默认值只是兜底，避免 JS 还没跑起来时闪一下。
+ */
+:root {
+  --dd-fs: 15px;
+  --dd-lh: 1.85;
+  --dd-pg: 1rem;
+  --dd-cw: 46rem;
+  --dd-font: var(--font-sans);
+}
+/* ── .note 块编辑器：富文本内容 ──
+ * 别在这里加"卡片"样式 —— 卡片是组件自己的事，这里只管**块内行内元素**。
+ */
+.dd-note-content {
+  /* 一行都别合并：换行、连续空格都得原样显示 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dd-note-content:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-ink-3);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.dd-note-content strong {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.dd-note-content em {
+  font-style: italic;
+}
+.dd-note-content del {
+  color: var(--color-ink-3);
+}
+.dd-note-content code {
+  border-radius: 5px;
+  background: var(--color-surface-2);
+  padding: 0.1em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--color-green-deep);
+}
+.dd-note-content a {
+  color: var(--color-green);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.dd-note-wiki {
+  color: var(--color-green);
+  border-bottom: 1px solid rgba(14, 155, 102, 0.3);
+}
+.dd-note-tag {
+  border-radius: 99px;
+  background: var(--color-green-soft);
+  padding: 0.1em 0.45em;
+  font-size: 0.87em;
+  color: var(--color-green);
+}
+.dd-note-math,
+.dd-note-img {
+  color: var(--color-green-deep);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+/* ─────────────────────────────────────────────────────────────
+ * .note 块编辑器（TipTap / ProseMirror）
+ *
+ * 卡片是 node view 画的外壳；这里只管"长什么样"。
+ * ⚠️ 别在编辑期用 JS 改 innerHTML —— 输入法会崩。这条写在 README 里。
+ * ───────────────────────────────────────────────────────────── */
+/*
+ * 排版的三条规矩：
+ *   1. **一个左基线**：标题、正文、图片、列里的文字，左边全都对齐到同一个 x。
+ *      所以卡片自己不加左右 padding，选中高亮用 box-shadow 往外画 —— 不占布局。
+ *   2. **间距跟块类型走**：正文之间贴得紧（2px），标题上方留白（18px），
+ *      图片上下留白（10px）。不是一律 12px —— 一律相等等于没有分组。
+ *   3. **两栏有固定槽宽**：半宽 = calc(50% - 12px)，列间距 24px，两栏正好铺满。
+ */
+/*
+ * 白板：左右有界、上下无界。
+ *
+ * 卡片是 absolute 定位的，位置由每块自己的 layout { x%, y px, w% } 决定 ——
+ * 拖到哪就停在哪，宽度随手拉，块之间不互相挤。
+ *
+ * 没摆过位置的块（新建的、老文件的）留在文档流里，由 JS 算出的 layoutBlocks
+ * 依次往下堆；一旦拖动过就会变成 absolute，从此自由。
+ */
+.dd-note-canvas {
+  position: relative;
+  display: block;
+  min-height: 320px;
+  margin: 0 -12px;
+  padding-bottom: 6rem;
+  outline: none;
+  white-space: pre-wrap;
+}
+
+/* 白板底纹：让人一眼看出这是可以随便摆的画布 */
+.dd-note-canvas {
+  background-image: radial-gradient(rgba(139, 154, 147, 0.16) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+}
+
+/*
+ * TipTap 会在 node view 外面再包一层 `.react-renderer`。
+ * 那层是 flex 容器认到的"项目"，但它没有宽度信息 —— 让它在布局上消失，
+ * 卡片（.dd-note-card）才是真正的 flex 项目，宽度/并排才生效。
+ */
+/*
+ * TipTap 的包装层要"在布局上消失"，卡片/列才是真正的 flex 项目。
+ * 注意中间还有一层 contentDOM（NodeViewContent 渲染的 div），
+ * 所以这里用后代选择器而不是直接子选择器。
+ */
+.dd-note-canvas > .react-renderer,
+.dd-note-columns [data-node-view-content-react],
+.dd-note-columns .react-renderer,
+.dd-note-column-body [data-node-view-content-react],
+.dd-note-column-body .react-renderer {
+  display: contents;
+}
+
+/*
+ * 卡片默认什么都没有：没有边框、没有底色。
+ * 未摆放时是流内块（宽度 100%），摆放后由 inline style 变成 absolute。
+ */
+/*
+ * ⚠️ flex-grow: 1 是排版的关键，别改回 0。
+ *
+ * 半宽块只是"允许跟别人并排"，不等于"必须只占一半"：
+ * 如果这一行里只有它自己（右边没有邻居），它会自动长满整行 ——
+ * 否则右边空着、正文却在窄栏里硬折行，就是上一版被骂的那个样子。
+ */
+.dd-note-card {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  border-radius: 8px;
+  /* 内边距让选中框不贴着文字；画布的 -12px 外边距把它抵回去，基线不变 */
+  padding: 3px 12px;
+  margin-top: 2px;
+  transition:
+    box-shadow 0.16s ease,
+    background-color 0.16s ease,
+    transform 0.18s ease,
+    opacity 0.18s ease;
+}
+
+/* 悬停：只给极轻的底色，不外扩（外扩会压到相邻块上） */
+.dd-note-card:hover {
+  background: rgba(238, 241, 239, 0.6);
+}
+
+/* 选中：只要一层**很淡的阴影边**，不铺白底 —— 版面别跟着跳 */
+.dd-note-card[data-selected] {
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(227, 231, 229, 0.9),
+    0 2px 10px rgba(16, 35, 28, 0.05);
+}
+
+/* 标题上方留白，把它和上一块分开 */
+.dd-note-card[data-type='heading'] {
+  margin-top: 16px;
+  /* 下面留 10px：那块悬停时浮出的工具条正好蹲在这条缝里，不压标题 */
+  margin-bottom: 10px;
+  padding: 2px 12px;
+}
+
+.dd-note-card[data-type='image'] {
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+/* 第一块不要顶到上面去 */
+.dd-note-canvas > .react-renderer:first-child .dd-note-card {
+  margin-top: 0;
+}
+
+/* 拖动中 */
+.dd-note-card.is-dragging {
+  z-index: 30;
+  transform: scale(1.02) rotate(0.6deg);
+  box-shadow: 0 18px 40px rgba(16, 35, 28, 0.18);
+  opacity: 0.92;
+}
+
+/* 落点指示 */
+.dd-note-card[data-drop='before']::before,
+.dd-note-card[data-drop='after']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--color-green);
+  z-index: 40;
+}
+.dd-note-card[data-drop='before']::before {
+  top: -7px;
+}
+.dd-note-card[data-drop='after']::after {
+  bottom: -7px;
+}
+
+/*
+ * 拖到左右两侧 = 分栏：把那半边高亮出来，告诉你"会插到这一侧"。
+ * 松手后两块都变半宽，自动并排。
+ */
+.dd-note-card[data-drop='left']::before,
+.dd-note-card[data-drop='right']::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 50%;
+  border-radius: 10px;
+  background: rgba(14, 155, 102, 0.09);
+  border: 1px dashed rgba(14, 155, 102, 0.5);
+  z-index: 40;
+  pointer-events: none;
+}
+.dd-note-card[data-drop='left']::before {
+  left: 0;
+}
+.dd-note-card[data-drop='right']::before {
+  right: 0;
+}
+
+/* 工具条 */
+/*
+ * 工具条默认 transparent + **pointer-events: none**。
+ * 只把 opacity 设 0 是个陷阱：按钮看不见但还能点，正文右端一戳就点到「删除」。
+ */
+/*
+ * 工具条在**左侧装订线**上，永远不压在正文上。
+ * 只显隐不拦截点击是陷阱：按钮看不见但还能点，正文右端一戳就点到「删除」。
+ */
+/*
+ * 工具条挂在块的**左上方**（左侧装订线，和块顶对齐）。
+ * 不能浮在块的上方 —— 那样会盖住上一块的文字（第一版就盖住了标题）。
+ */
+/*
+ * 位置：块的**左上方**。
+ * x 留在左侧装订线里（不压正文），y 提上去让按钮蹲在块的上边缘 ——
+ * 看起来是"块左上角的一个小浮层"，而不是跟正文挤在同一行。
+ */
+/*
+ * 位置：**块的上边缘、左角上**。
+ * 不是左侧留白里 —— 那样离块太远，看不出这些按钮属于哪一块。
+ * 浮在块顶边上，带一层浅底，悬停/选中才出现。
+ */
+/*
+ * 工具条：浮在块的上方、左角对齐，和块留 5px 空隙。
+ * 只在**悬停**时出现（不是选中就出现）—— 打字时选中块的工具条会盖住上一行，
+ * 那种"总有个东西挡着"的感觉比找不到按钮更烦。
+ */
+.dd-note-tools {
+  position: absolute;
+  /*
+   * 位置：块的**上边缘之上、左边缘之内**（不是左侧留白里）。
+   * 垂直离块顶 ~4px，水平从块的内边缘起算 12px —— 就是用户画的框那个位置。
+   */
+  top: -30px;
+  left: 12px;
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 7px;
+  background: rgba(245, 247, 246, 0.96);
+  box-shadow: 0 1px 4px rgba(16, 35, 28, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  /* 消失延迟 180ms：给鼠标挪到按钮上的时间 */
+  transition: opacity 0.12s ease 0.18s;
+  z-index: 20;
+}
+
+/* 第一块：上面就是文档标题，退回到左侧留白里 */
+.dd-note-canvas > .react-renderer:first-child .dd-note-tools {
+  top: 0;
+  left: -3.4rem;
+}
+.dd-note-card:hover .dd-note-tools,
+.dd-note-tools.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.dd-note-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: rgba(139, 154, 147, 0.85);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.dd-note-btn:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+}
+.dd-note-btn[draggable='true'] {
+  cursor: grab;
+}
+.dd-note-btn[draggable='true']:active {
+  cursor: grabbing;
+}
+.dd-note-btn.is-on {
+  background: var(--color-green-soft);
+  color: var(--color-green);
+}
+
+.dd-note-clear {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: auto;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(16, 35, 28, 0.12);
+  opacity: 0;
+}
+.dd-note-card:hover .dd-note-clear {
+  opacity: 1;
+}
+
+/* 可编辑内容 */
+.dd-note-content {
+  outline: none;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--dd-lh);
+  font-size: var(--dd-fs);
+  color: var(--color-ink);
+}
+
+.dd-note-content.is-heading {
+  font-size: 1.6em;
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: -0.02em;
+}
+
+/* 空块提示 */
+.dd-note-content.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-ink-3);
+  opacity: 0.6;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* 行内元素 */
+.dd-note-content strong {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.dd-note-content em {
+  font-style: italic;
+}
+.dd-note-content del {
+  color: var(--color-ink-3);
+}
+.dd-note-content code {
+  border-radius: 5px;
+  background: var(--color-surface-2);
+  padding: 0.1em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--color-green-deep);
+}
+.dd-note-content a {
+  color: var(--color-green);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 图片块 */
+.dd-note-image img {
+  display: block;
+  /* 宽:auto + max-width:100% —— 小图保持原尺寸（不拉伸糊掉），大图等比缩进容器 */
+  width: auto;
+  max-width: 100%;
+  max-height: 30rem;
+  /* 别裁图：笔记里的图要看得全，超出高度就等比缩进去 */
+  object-fit: contain;
+  margin: 0 auto;
+  background: rgba(238, 241, 239, 0.45);
+  border-radius: 8px;
+}
+.dd-note-image.is-over {
+  outline: 2px solid rgba(14, 155, 102, 0.5);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+.dd-note-image-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 96px;
+  border: 1px dashed var(--color-line);
+  border-radius: 8px;
+  background: rgba(238, 241, 239, 0.4);
+  color: var(--color-ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+.dd-note-image-empty:hover {
+  border-color: rgba(14, 155, 102, 0.4);
+  color: var(--color-green);
+}
+
+/* 选区 */
+.dd-note-canvas ::selection {
+  background: var(--color-green-soft);
+  color: var(--color-green-deep);
+}
+/* 块的右边缘：拖动改宽度（百分比），拖到 100% 回到整行 */
+.dd-note-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -5px;
+  width: 10px;
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  z-index: 15;
+}
+.dd-note-resize::after {
+  content: '';
+  position: absolute;
+  top: 25%;
+  bottom: 25%;
+  left: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-green);
+  opacity: 0.55;
+}
+.dd-note-card:hover .dd-note-resize,
+.dd-note-card[data-selected] .dd-note-resize {
+  opacity: 1;
+}
+/* ── 分栏容器（真正的多列布局，不是"半宽块碰巧并排"） ── */
+.dd-note-columns-wrap {
+  position: relative;
+  min-width: 0;
+  display: block;
+}
+.dd-note-columns {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 20px;
+}
+.dd-note-column {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dd-note-column-body {
+  min-width: 0;
+  outline: none;
+}
+.dd-note-col-badge {
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+  padding: 0 4px;
+  line-height: 22px;
+}
+.dd-note-col-add {
+  align-self: flex-start;
+  margin-top: 6px;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-ink-3);
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.dd-note-col-add:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+}
+.dd-note-col-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -10px;
+  width: 12px;
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  z-index: 10;
+}
+.dd-note-column:hover .dd-note-col-resize {
+  opacity: 1;
+}
+.dd-note-col-resize::after {
+  content: '';
+  position: absolute;
+  top: 10%;
+  bottom: 10%;
+  left: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-line);
+}
+/* 列内的块：挤一挤、空块别塌 */
+.dd-note-column-body > .dd-note-card,
+.dd-note-column-body > .react-renderer > .dd-note-card {
+  margin-top: 6px;
+}
+.dd-note-column-body .dd-note-content {
+  min-height: 1.6em;
+}
+.dd-note-column-body .dd-note-content.is-empty::before {
+  float: none;
+  display: inline;
+  height: auto;
+}
+/* ── 分栏的可见操作条（常显，否则功能等于不存在） ── */
+.dd-note-columns-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 2px 0;
+  min-height: 22px;
+}
+.dd-note-columns-title {
+  font-size: 11px;
+  color: var(--color-ink-3);
+  letter-spacing: 0.02em;
+}
+.dd-note-columns-hint {
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+  opacity: 0.7;
+}
+.dd-note-columns-act {
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-ink-2);
+  background: var(--color-surface-2);
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.dd-note-columns-act:hover {
+  background: var(--color-green-soft);
+  color: var(--color-green);
+}
+.dd-note-columns-act.is-danger:hover {
+  background: rgba(200, 90, 80, 0.1);
+  color: #b4554c;
+}
+
+/* 每列的"列 · 34%"小标签：鼠标移上去才明显，但一直在，能看出这是可拖的列 */
+.dd-note-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 16px;
+}
+.dd-note-column-label {
+  font-size: 10px;
+  color: var(--color-ink-3);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+.dd-note-column:hover .dd-note-column-label {
+  opacity: 0.9;
+}
+
+/* 列本身就是一块可编辑区域：悬停给一点底色，边界看得见 */
+.dd-note-column {
+  border-radius: 8px;
+  padding: 2px 8px 4px;
+  transition: background-color 0.14s ease;
+}
+.dd-note-column:hover {
+  background: rgba(238, 241, 239, 0.55);
+}
+
+/* "＋ 加一块" 改成虚线小按钮，别像正文 */
+.dd-note-col-add {
+  align-self: flex-start;
+  margin-top: 6px;
+  border: 1px dashed var(--color-line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--color-ink-3);
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+.dd-note-col-add:hover {
+  border-color: rgba(14, 155, 102, 0.45);
+  color: var(--color-green);
+}

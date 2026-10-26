@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Dusk Depot — UI 样张</title>
+<style>
+  :root {
+    --paper: #f5f7f6;
+    --surface: #ffffff;
+    --surface-2: #eef1ef;
+    --line: #e3e7e5;
+    --ink: #10231c;
+    --ink-2: #4a5a53;
+    --ink-3: #8b9a93;
+    --green: #0e9b66;
+    --green-bright: #2acb95;
+    --green-deep: #054e38;
+    --green-soft: #e9f7f0;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+  .app { display: flex; height: 100%; overflow: hidden; }
+
+  /* ── 功能轨 ── */
+  .rail {
+    width: 56px; flex: 0 0 56px; display: flex; flex-direction: column;
+    align-items: center; gap: 4px; padding: 12px 0; background: var(--paper);
+  }
+  .rail .sp { flex: 1; }
+  .rail button {
+    width: 36px; height: 36px; display: grid; place-items: center;
+    border-radius: 10px; color: var(--ink-3); transition: background .12s, color .12s;
+  }
+  .rail button:hover { background: var(--surface-2); color: var(--ink-2); }
+  .rail button.on {
+    background: var(--surface); color: var(--ink);
+    box-shadow: 0 1px 2px rgba(16,35,28,.10);
+  }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%; margin-top: 4px;
+    display: grid; place-items: center; font-size: 10px; font-weight: 600;
+    color: var(--green-deep); background: rgba(42,203,149,.3);
+  }
+
+  /* ── 目录栏 ── */
+  .panel {
+    width: 268px; flex: 0 0 268px; display: flex; flex-direction: column;
+    background: var(--surface); border-right: 1px solid var(--line);
+  }
+  .panel-head { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 6px; padding: 0 12px; }
+  .panel-head img { width: 20px; height: 20px; border-radius: 5px; display: block; }
+  .panel-head .name { font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+  .panel-head .acts { margin-left: auto; display: flex; gap: 2px; }
+  .icon-btn {
+    width: 28px; height: 28px; display: grid; place-items: center;
+    border-radius: 6px; color: var(--ink-3); transition: background .12s, color .12s;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--ink-2); }
+
+  .new-note {
+    margin: 0 8px 4px; height: 32px; display: flex; align-items: center; gap: 8px;
+    padding: 0 8px; border-radius: 6px; font-size: 13px; color: var(--ink-2);
+    transition: background .12s;
+  }
+  .new-note:hover { background: var(--surface-2); }
+
+  .label { padding: 8px 16px 4px; font-size: 11px; font-weight: 500; letter-spacing: .02em; color: var(--ink-3); }
+
+  .tree { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+  .row {
+    height: 28px; width: 100%; display: flex; align-items: center; gap: 6px;
+    border-radius: 6px; padding: 0 8px; font-size: 13px; color: var(--ink-2);
+    transition: background .12s;
+  }
+  .row:hover { background: var(--surface-2); }
+  .row .chev { color: var(--ink-3); display: grid; place-items: center; }
+  .row .chev.open { transform: rotate(90deg); }
+  .row.folder { padding-left: 8px; }
+  .row.file { padding-left: 26px; }
+  .row.file.sub { padding-left: 38px; }
+  .row.sel { background: var(--green-soft); color: var(--green-deep); font-weight: 500; }
+  .row.sel svg { color: var(--green); }
+  .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row svg { flex: 0 0 auto; }
+
+  /* ── 正文 ── */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
+  .main-head {
+    height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 12px;
+    padding: 0 16px; border-bottom: 1px solid var(--line);
+  }
+  .crumb { display: flex; align-items: center; gap: 4px; font-size: 12.5px; min-width: 0; }
+  .crumb .seg { color: var(--ink-3); }
+  .crumb .cur { color: var(--ink); font-weight: 500; }
+  .main-head .acts { margin-left: auto; }
+
+  .scroll { flex: 1; overflow-y: auto; }
+  article { max-width: 46rem; margin: 0 auto; padding: 48px 40px 112px; }
+
+  h1 { font-size: 27px; line-height: 1.15; letter-spacing: -.022em; margin: 4px 0 20px; font-weight: 600; }
+  h2 { font-size: 17px; line-height: 1.35; letter-spacing: -.01em; margin: 36px 0 12px; font-weight: 600; }
+  .mk { font-family: var(--mono); color: rgba(139,154,147,.4); font-weight: 400; margin-right: 9px; }
+  h1 .mk { font-size: 15px; }
+  h2 .mk { font-size: 13px; margin-right: 8px; }
+  p { font-size: 15px; line-height: 1.9; color: var(--ink-2); margin: 0 0 16px; }
+  .li { display: flex; gap: 12px; padding-left: 4px; margin-bottom: 8px; }
+  .li .dot { width: 3px; height: 3px; border-radius: 50%; background: rgba(14,155,102,.6); margin-top: 11px; flex: 0 0 auto; }
+  .li p { margin: 0; }
+  blockquote {
+    margin: 24px 0; padding-left: 16px; border-left: 2px solid rgba(14,155,102,.25);
+    font-size: 14.5px; line-height: 1.85; color: var(--ink-2);
+  }
+  .wiki { color: var(--green); text-decoration: underline; text-decoration-color: rgba(14,155,102,.35); text-underline-offset: 2px; }
+  .wb { color: rgba(139,154,147,.6); }
+  .tag {
+    display: inline-block; background: var(--green-soft); color: var(--green);
+    border-radius: 3px; padding: 0 4px; font-size: 13.5px;
+  }
+  .tag i { font-style: normal; color: rgba(14,155,102,.45); }
+
+  .status {
+    height: 32px; flex: 0 0 32px; display: flex; align-items: center; gap: 12px;
+    padding: 0 16px; border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .badge { background: var(--surface-2); border-radius: 4px; padding: 1px 6px; }
+  .status .path { margin-left: auto; font-family: var(--mono); }
+
+  /* ── 旁注栏 ── */
+  .aside {
+    width: 288px; flex: 0 0 288px; display: flex; flex-direction: column;
+    background: var(--surface); border-left: 1px solid var(--line);
+  }
+  .aside-head {
+    height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 2px;
+    padding: 0 8px; border-bottom: 1px solid var(--line);
+  }
+  .tab { border-radius: 6px; padding: 4px 10px; font-size: 12.5px; color: var(--ink-3); transition: .12s; }
+  .tab:hover { color: var(--ink-2); }
+  .tab.on { background: var(--surface-2); color: var(--ink); font-weight: 500; }
+  .aside-head .icon-btn { margin-left: auto; }
+
+  .aside-body { flex: 1; overflow-y: auto; padding: 8px; }
+  .ol { width: 100%; text-align: left; border-radius: 6px; padding: 4px 8px; font-size: 12.5px;
+        color: var(--ink-2); display: block; transition: background .12s; }
+  .ol:hover { background: var(--surface-2); }
+  .ol.lv1 { color: var(--ink); font-weight: 500; }
+  .ol.lv2 { padding-left: 20px; }
+
+  .sect-t { font-size: 11px; font-weight: 500; letter-spacing: .02em; color: var(--ink-3);
+            margin: 20px 4px 6px; display: flex; align-items: center; gap: 6px; }
+  .bl { width: 100%; text-align: left; border-radius: 6px; padding: 6px 8px; transition: background .12s; }
+  .bl:hover { background: var(--surface-2); }
+  .bl .from { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--ink); }
+  .bl .quote {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    margin-top: 2px; font-size: 11.5px; line-height: 1.5; color: var(--ink-3);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── 功能轨 ── -->
+  <nav class="rail">
+    <button class="on" title="笔记">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/><path d="M5.4 8.6h5.2M5.4 11.2h3.4"/></svg>
+    </button>
+    <button title="搜索">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.35 10.35 13.5 13.5"/></svg>
+    </button>
+    <button title="标签">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.4 2.6 5.6 13.4M10.4 2.6 9.6 13.4"/><path d="M2.6 5.9h10.8M2.6 10.1h10.8"/></svg>
+    </button>
+    <div class="sp"></div>
+    <button title="设置">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.6 5.5h3M8.7 5.5h4.7M2.6 10.5h5M10.7 10.5h2.7"/><circle cx="7.1" cy="5.5" r="1.6"/><circle cx="9.1" cy="10.5" r="1.6"/></svg>
+    </button>
+    <div class="avatar">DD</div>
+  </nav>
+
+  <!-- ── 目录栏 ── -->
+  <section class="panel">
+    <header class="panel-head">
+      <img src="../public/icon.svg" alt="">
+      <span class="name">Dusk Depot</span>
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(90deg)"><path d="M6.25 4 10.25 8l-4 4"/></svg>
+      <div class="acts">
+        <button class="icon-btn" title="搜索">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2 13.5 13.5"/></svg>
+        </button>
+        <button class="icon-btn" title="更多">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><circle cx="3.6" cy="8" r=".95"/><circle cx="8" cy="8" r=".95"/><circle cx="12.4" cy="8" r=".95"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <button class="new-note">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg>
+      新建笔记
+    </button>
+
+    <div class="label">笔记库</div>
+
+    <div class="tree">
+      <button class="row folder">
+        <span class="chev open"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4 10.25 8l-4 4"/></svg></span>
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M2.2 4.6a1.2 1.2 0 0 1 1.2-1.2h2.4l1.6 1.7h5.2a1.2 1.2 0 0 1 1.2 1.2v5.3a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2Z"/></svg>
+        <span>thoughts</span>
+      </button>
+      <button class="row file sub">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>2026-10-17-雨天</span>
+      </button>
+      <button class="row file sub">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>2026-10-14-增量</span>
+      </button>
+
+      <button class="row folder">
+        <span class="chev open"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4 10.25 8l-4 4"/></svg></span>
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M2.2 4.6a1.2 1.2 0 0 1 1.2-1.2h2.4l1.6 1.7h5.2a1.2 1.2 0 0 1 1.2 1.2v5.3a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2Z"/></svg>
+        <span>notes</span>
+      </button>
+      <button class="row file sub sel">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>单一真相</span>
+      </button>
+      <button class="row file sub">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>路径层</span>
+      </button>
+      <button class="row file sub">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>记账要诚实</span>
+      </button>
+
+      <button class="row folder">
+        <span class="chev"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4 10.25 8l-4 4"/></svg></span>
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M2.2 4.6a1.2 1.2 0 0 1 1.2-1.2h2.4l1.6 1.7h5.2a1.2 1.2 0 0 1 1.2 1.2v5.3a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2Z"/></svg>
+        <span>草稿</span>
+      </button>
+
+      <button class="row file">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+        <span>收件箱</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ── 正文 ── -->
+  <main class="main">
+    <header class="main-head">
+      <div class="crumb">
+        <span class="seg">notes</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(90deg)"><path d="M6.25 4 10.25 8l-4 4"/></svg>
+        <span class="cur">单一真相.md</span>
+      </div>
+      <div class="acts">
+        <button class="icon-btn" style="background:#eef1ef;color:#4a5a53" title="右栏">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <article>
+        <h1><span class="mk">#</span>单一真相</h1>
+        <p>内存里的 files 只是磁盘的影子，不是本体。判断一个设计好不好，先问一句：它有没有让「笔记是一堆真文件」这件事变得更假？</p>
+
+        <h2><span class="mk">##</span>判据</h2>
+        <p>这份数据坏了，用户会丢东西吗？会，那它是真相，只能有一份。不会，那它是缓存，随便。</p>
+        <div class="li"><span class="dot"></span><p>笔记内容只存在文件里，任何缓存都不许被当成可写入的来源。</p></div>
+        <div class="li"><span class="dot"></span><p>同一份偏好不许两个组件各自读一遍，否则就是两份真理。</p></div>
+        <div class="li"><span class="dot"></span><p>反链、标签、全文索引都是缓存 —— 删掉能重建，就不算丢数据。</p></div>
+
+        <blockquote>夹紧会把「写错路径」变成「写到别处」，那比报错危险得多。</blockquote>
+
+        <h2><span class="mk">##</span>相关的几篇</h2>
+        <p>见 <span class="wb">[[</span><span class="wiki">路径层</span><span class="wb">]]</span> 与 <span class="wb">[[</span><span class="wiki">记账要诚实</span><span class="wb">]]</span>，另外这条挂在标签 <span class="tag"><i>#</i>设计</span> <span class="tag"><i>#</i>不变量</span> 下面。</p>
+      </article>
+    </div>
+
+    <footer class="status">
+      <span class="badge">演示数据</span>
+      <span>还没有接上仓库</span>
+      <span class="path">notes/单一真相.md</span>
+    </footer>
+  </main>
+
+  <!-- ── 旁注栏 ── -->
+  <aside class="aside">
+    <header class="aside-head">
+      <button class="tab on">大纲</button>
+      <button class="tab">关系</button>
+      <button class="icon-btn" title="关闭">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 4l4 4-4 4"/></svg>
+      </button>
+    </header>
+    <div class="aside-body">
+      <button class="ol lv1">单一真相</button>
+      <button class="ol lv2">判据</button>
+      <button class="ol lv2">相关的几篇</button>
+
+      <div class="sect-t">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.6 9.4 9.4 6.6"/><path d="M7.4 4.4 8.7 3.1a2.4 2.4 0 0 1 3.4 3.4L10.8 7.8"/><path d="M8.6 11.6 7.3 12.9a2.4 2.4 0 0 1-3.4-3.4L5.2 8.2"/></svg>
+        引用这篇的
+      </div>
+      <button class="bl">
+        <span class="from">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+          路径层.md
+        </span>
+        <span class="quote">……所以 path 这一层必须只有一个入口，见「单一真相」。</span>
+      </button>
+      <button class="bl">
+        <span class="from">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="#8b9a93" stroke-width="1.5" stroke-linejoin="round"><path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z"/><path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13"/></svg>
+          2026-10-14-增量.md
+        </span>
+        <span class="quote">基线如果不是唯一真相，就会变成第二个真相。</span>
+      </button>
+    </div>
+  </aside>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Dusk Depot — 图标检查页</title>
+<style>
+  :root {
+    --ink: #10231c;
+    --green: #0e9b66;
+    --page: #f4f6f5;
+    --card: #ffffff;
+    --line: #e1e5e3;
+    --muted: #6b7671;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 44px 28px 96px;
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 12px; font-weight: 600; margin: 38px 0 12px; color: var(--muted);
+       text-transform: uppercase; letter-spacing: 0.09em; }
+  .sub { color: var(--muted); margin: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 26px; }
+
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .pair .card { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+  .pair img { width: 168px; height: 168px; display: block; }
+  .pair p { margin: 0; font-size: 13px; color: var(--muted); }
+  .pair b { display: block; color: var(--ink); font-size: 14px; margin-bottom: 2px; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px;
+         background: #e7f6ef; color: #0a7a51; font-weight: 600; }
+
+  .sizes { display: flex; align-items: flex-end; gap: 30px; flex-wrap: wrap; }
+  .size { text-align: center; }
+  .size img { display: block; margin: 0 auto 8px; }
+  .size span { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .dark { background: #0e1512; border-color: #0e1512; }
+  .dark .size span { color: #8fa39a; }
+  .light { background: #ffffff; }
+
+  .masks { display: flex; gap: 34px; flex-wrap: wrap; align-items: flex-end; }
+  .mask { text-align: center; }
+  .mask > div { width: 92px; height: 92px; overflow: hidden; background: #eef1ef;
+                display: grid; place-items: center; }
+  .mask img { width: 128px; height: 128px; display: block; }
+  .m-circle > div { border-radius: 50%; }
+  .m-squircle > div { border-radius: 30%; }
+  .m-square > div { border-radius: 10px; }
+  .mask span { display: block; margin-top: 8px; font-size: 11px; color: var(--muted); }
+
+  .taskbar { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+             background: #202422; border-radius: 10px; width: fit-content; }
+  .taskbar img { width: 24px; height: 24px; display: block; }
+  .taskbar .fake { width: 24px; height: 24px; border-radius: 5px; background: #3a403d; }
+
+  footer { margin-top: 34px; color: var(--muted); font-size: 12px; }
+  code { font-family: ui-monospace, Consolas, monospace; background: #e9ecea;
+         padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Dusk Depot — 图标检查</h1>
+  <p class="sub">只拿来量图标，不进构建。双击在本机浏览器里打开即可。</p>
+
+  <h2>两版对比</h2>
+  <div class="pair">
+    <div class="card">
+      <img src="icon.svg" alt="绿色版面">
+      <div><b>绿色版面</b><span class="tag">建议做 app icon</span></div>
+      <p>整块绿色渐变当"纸"，节点与连线是白色。<br>小尺寸立得住，启动器里也认得出。</p>
+    </div>
+    <div class="card">
+      <img src="icon-white.svg" alt="白色版面">
+      <div><b>白色版面</b><span class="tag">建议做界面内标记</span></div>
+      <p>白纸 + 墨绿骨架 + 绿色连线。<br>放进浅色界面不抢戏，但当图标偏弱。</p>
+    </div>
+  </div>
+
+  <h2>绿色版面 · 各档尺寸</h2>
+  <div class="card sizes light">
+    <div class="size"><img src="icon.svg" width="16" height="16" alt=""><span>16</span></div>
+    <div class="size"><img src="icon.svg" width="24" height="24" alt=""><span>24</span></div>
+    <div class="size"><img src="icon.svg" width="32" height="32" alt=""><span>32</span></div>
+    <div class="size"><img src="icon.svg" width="48" height="48" alt=""><span>48</span></div>
+    <div class="size"><img src="icon.svg" width="64" height="64" alt=""><span>64</span></div>
+    <div class="size"><img src="icon.svg" width="96" height="96" alt=""><span>96</span></div>
+    <div class="size"><img src="icon.svg" width="128" height="128" alt=""><span>128</span></div>
+  </div>
+
+  <h2>绿色版面 · 深色底与任务栏</h2>
+  <div class="card dark">
+    <div class="sizes">
+      <div class="size"><img src="icon.svg" width="24" height="24" alt=""><span>24</span></div>
+      <div class="size"><img src="icon.svg" width="32" height="32" alt=""><span>32</span></div>
+      <div class="size"><img src="icon.svg" width="48" height="48" alt=""><span>48</span></div>
+      <div class="size"><img src="icon.svg" width="64" height="64" alt=""><span>64</span></div>
+      <div class="size">
+        <div class="taskbar">
+          <img src="icon.svg" alt="">
+          <div class="fake"></div><div class="fake"></div><div class="fake"></div>
+        </div>
+        <span>傍边是这个大小</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>启动器遮罩模拟</h2>
+  <div class="card masks">
+    <div class="mask m-circle"><div><img src="icon.svg" alt=""></div><span>圆形</span></div>
+    <div class="mask m-squircle"><div><img src="icon.svg" alt=""></div><span>超椭圆</span></div>
+    <div class="mask m-square"><div><img src="icon.svg" alt=""></div><span>圆角方</span></div>
+  </div>
+
+  <h2>白色版面 · 各档尺寸</h2>
+  <div class="card sizes">
+    <div class="size"><img src="icon-white.svg" width="16" height="16" alt=""><span>16</span></div>
+    <div class="size"><img src="icon-white.svg" width="24" height="24" alt=""><span>24</span></div>
+    <div class="size"><img src="icon-white.svg" width="32" height="32" alt=""><span>32</span></div>
+    <div class="size"><img src="icon-white.svg" width="48" height="48" alt=""><span>48</span></div>
+    <div class="size"><img src="icon-white.svg" width="64" height="64" alt=""><span>64</span></div>
+    <div class="size"><img src="icon-white.svg" width="96" height="96" alt=""><span>96</span></div>
+  </div>
+
+  <footer>
+    基准 <code>viewBox="0 0 128 128"</code>。绿 <code>#2acb95 → #0e9b66 → #054e38</code>，
+    墨绿 <code>#10231c</code>。改完图标刷新本页即可。
+  </footer>
+</div>
+</body>
+</html>
