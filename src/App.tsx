@@ -3,7 +3,7 @@ import type { Snapshot } from './core/model/flush'
 import { diffRepo, flushRepo, settleBaseline } from './core/model/flush'
 import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
-import { docFiles, emptyDoc, isNoteDocPath } from './core/note/format'
+import { isNoteDocPath } from './core/note/format'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
 import { parentOf, stemOf } from './core/model/path'
 import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/rename'
@@ -41,7 +41,6 @@ import { Aside } from './ui/Aside'
 import { SettingsDialog } from './ui/SettingsDialog'
 import { applySettings, loadSettings, resetSettings, saveSettings, type Settings } from './ui/settings'
 import { DocPane } from './ui/DocPane'
-import { Rail, type Section } from './ui/Rail'
 import { RepoGate } from './ui/RepoGate'
 import { PaneDivider } from './ui/PaneDivider'
 import { Resizer } from './ui/Resizer'
@@ -211,7 +210,6 @@ export function App() {
     applySettings(settings)
     saveSettings(settings)
   }, [settings])
-  const [section, setSection] = useState<Section>('notes')
   const [save, setSave] = useState<SaveState>('clean')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [pins, setPins] = useState<string[]>([])
@@ -675,33 +673,6 @@ export function App() {
     return path
   }
 
-  /**
-   * 新建一篇 `.note`（块笔记）。
-   * 目录要真的建出来 —— `.note` 是"目录即文档"，磁盘上没有这个目录它就不存在。
-   */
-  async function createBlockNote(dir: string): Promise<string | null> {
-    if (phase.t !== 'ready') return null
-    const base = dir ? `${dir}/` : ''
-    const path = uniquePath(`${base}新建块笔记.note`, taken)
-
-    const doc = emptyDoc(stemOf(path))
-    try {
-      await phase.host.mkdir(path)
-      await phase.host.mkdir(`${path}/blocks`)
-      for (const [p, text] of Object.entries(docFiles(path, doc))) {
-        await phase.host.write(p, encodeText(text))
-      }
-    } catch (e) {
-      console.warn('[dusk] 建不了 .note', e)
-      return null
-    }
-
-    setNoteDocs((prev) => [...prev, path])
-    if (dir) setExpanded((prev) => new Set(prev).add(dir))
-    openNote(path)
-    return path
-  }
-
   function createFolder(dir: string): string | null {
     const path = uniquePath(folderPath(dir, '新建文件夹'), taken)
     setDirs((prev) => [...prev, path])
@@ -809,10 +780,7 @@ export function App() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-paper text-ink">
       <div className="flex min-h-0 flex-1">
-        <Rail section={section} onChange={setSection} onSettings={() => setSettingsOpen(true)} />
-
         <TreePanel
-            section={section}
             tree={tree}
             current={current}
             expanded={expanded}
@@ -821,7 +789,6 @@ export function App() {
             onOpenTab={openInNewTab}
             onOpenSplit={openInSplit}
             onNewNote={createNote}
-            onNewBlockNote={(dir) => void createBlockNote(dir)}
             onNewFolder={createFolder}
             onRename={doRename}
             onMove={doMove}
@@ -839,6 +806,9 @@ export function App() {
               if (hit) void switchVault(hit.ref)
             }}
             onPickVault={() => void chooseFolder()}
+            files={files}
+            noteDocs={noteDocs.length}
+            onSettings={() => setSettingsOpen(true)}
             width={leftW}
             resizer={
               <Resizer

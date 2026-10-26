@@ -335,3 +335,27 @@ export const IconHr = (p: P) => (
     <path d="M2 8h12" />
   </Base>
 )
+
+/** 工具：一把扳手（左栏「工具」页签用） */
+export const IconTool = (p: P) => (
+  <Base {...p}>
+    <path d="M10.5 2.8a3 3 0 0 0-3.9 3.9L3 10.3V13h2.7l3.6-3.6a3 3 0 0 0 3.9-3.9l-2 2-2.1-2.1 2-2Z" />
+  </Base>
+)
+
+/** 查重：两张叠起来的纸 */
+export const IconDuplicate = (p: P) => (
+  <Base {...p}>
+    <rect x="2.6" y="2.6" width="7" height="8.6" rx="1.4" />
+    <rect x="6.4" y="4.8" width="7" height="8.6" rx="1.4" />
+  </Base>
+)
+
+/** 回收站：一个带盖的桶 */
+export const IconTrash = (p: P) => (
+  <Base {...p}>
+    <path d="M3.2 4.6h9.6" />
+    <path d="M6.4 2.6h3.2" />
+    <path d="M4.6 4.6 5.3 12.9a1 1 0 0 0 1 .9h3.4a1 1 0 0 0 1-.9l.7-8.3" />
+  </Base>
+)

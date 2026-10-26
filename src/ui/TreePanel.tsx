@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TreeNode } from '../core/model/library'
+import type { FileMap } from '../core/model/library'
 import type { ReactNode } from 'react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import {
-  IconBlocks,
   IconChevron,
   IconFile,
   IconFolder,
@@ -11,11 +11,11 @@ import {
   IconMore,
   IconPin,
   IconPlus,
+  IconSliders,
 } from './icons'
-import type { Section } from './Rail'
+import { ToolTabIcon, ToolsPanel } from './ToolsPanel'
 
 type Props = {
-  section: Section
   tree: TreeNode[]
   current: string | null
   expanded: Set<string>
@@ -28,8 +28,6 @@ type Props = {
 
   /** 在某个目录里新建。返回新路径或 null */
   onNewNote: (dir: string) => string | null
-  /** 新建块笔记（.note） */
-  onNewBlockNote: (dir: string) => void
   onNewFolder: (dir: string) => string | null
   /** 改名。返回错误消息；成功返回 null */
   onRename: (path: string, name: string) => string | null
@@ -54,6 +52,13 @@ type Props = {
   onSwitchVault: (key: string) => void
   onPickVault: () => void
 
+  /** 工具页要扫坏链，得拿到当前文件表 */
+  files: FileMap
+  /** `.note` 目录数（还没退役，先计入篇数） */
+  noteDocs: number
+  /** 打开设置面板 */
+  onSettings: () => void
+
   /** 宽度由 App 管（可拖动） */
   width: number
   /** 拖拽把手，由 App 传进来贴在这一栏的右边缘 */
@@ -67,18 +72,17 @@ const SAVE_LABEL = {
   error: '写盘失败',
 } as const
 
-const TITLE: Record<Section, string> = {
-  notes: 'Dusk Depot',
-  search: '搜索',
-  tags: '标签',
-}
+/** 左栏顶部的两个页签：文件 / 工具 */
+type SideTab = 'files' | 'tools'
+
+const HEAD_BTN =
+  'grid size-6 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2'
 
 type MenuState = { x: number; y: number; path: string | null } | null
 type RenameState = { path: string; value: string } | null
 
 /** 第二列：右键菜单、就地改名、拖动搬家、删除确认都在这一列里 */
 export function TreePanel({
-  section,
   tree,
   current,
   expanded,
@@ -87,7 +91,6 @@ export function TreePanel({
   onOpenTab,
   onOpenSplit,
   onNewNote,
-  onNewBlockNote,
   onNewFolder,
   onRename,
   onMove,
@@ -102,9 +105,13 @@ export function TreePanel({
   currentVaultKey,
   onSwitchVault,
   onPickVault,
+  files,
+  noteDocs,
+  onSettings,
   width,
   resizer,
 }: Props) {
+  const [tab, setTab] = useState<SideTab>('files')
   const [menu, setMenu] = useState<MenuState>(null)
   const [rename, setRename] = useState<RenameState>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -304,47 +311,71 @@ export function TreePanel({
 
   return (
     <section
-      aria-label={TITLE[section]}
+      aria-label="文件与工具"
       style={{ width }}
       className="relative flex shrink-0 flex-col border-r border-line bg-surface"
     >
-      {section === 'notes' ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex gap-1 px-2 pt-2 pb-1">
+      {/* 顶部：VS 式两个页签。只做这两档，后面再加 */}
+      <div className="flex h-[38px] shrink-0 items-stretch gap-0.5 border-b border-line px-1" role="tablist" aria-label="左侧功能">
+        {(
+          [
+            { id: 'files', label: '文件', Icon: IconFile },
+            { id: 'tools', label: '工具', Icon: ToolTabIcon },
+          ] as const
+        ).map(({ id, label, Icon }) => {
+          const on = tab === id
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => setTab(id)}
+              className={[
+                'relative flex items-center gap-1.5 px-3 text-[12.5px] transition-colors',
+                on ? 'font-medium text-ink' : 'text-ink-3 hover:text-ink-2',
+              ].join(' ')}
+            >
+              <Icon className="size-3.5" />
+              {label}
+              {on ? (
+                <span aria-hidden className="absolute inset-x-2 -bottom-px h-0.5 rounded-t bg-green" />
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
+
+      {tab === 'files' ? (
+        <div data-dd-files className="flex min-h-0 flex-1 flex-col">
+          {/* 篇数 + 新建。仓库名仍在底部，点它切仓库 */}
+          <div className="flex h-[34px] shrink-0 items-center gap-1 border-b border-line pr-2 pl-3">
+            <span className="font-mono text-[11px] text-ink-3">
+              {Object.keys(files).length + noteDocs} 篇
+            </span>
+            <span className="flex-1" />
             <button
               type="button"
               onClick={() => startCreate('', 'note')}
-              className="flex h-8 flex-1 items-center gap-2 rounded-md px-2 text-[13px] text-ink-2 transition-colors hover:bg-surface-2"
+              title="新建笔记"
+              aria-label="新建笔记"
+              className={HEAD_BTN}
             >
-              <IconPlus className="size-4 text-ink-3" />
-              新建笔记
-            </button>
-            <button
-              type="button"
-              onClick={() => onNewBlockNote('')}
-              title="新建块笔记（.note）"
-              aria-label="新建块笔记"
-              className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
-            >
-              <IconBlocks className="size-4" />
+              <IconPlus className="size-4" />
             </button>
             <button
               type="button"
               onClick={() => startCreate('', 'folder')}
               title="新建文件夹"
               aria-label="新建文件夹"
-              className="grid size-8 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+              className={HEAD_BTN}
             >
               <IconFolderPlus className="size-4" />
             </button>
           </div>
 
-          <div className="px-4 pt-2 pb-1 text-[11px] font-medium tracking-wide text-ink-3">
-            笔记库
-          </div>
-
           <div
-            className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
+            className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-4"
             onDragOver={(e) => {
               // 拖到列表空白处 = 挪到根目录
               if (dragging) {
@@ -376,12 +407,7 @@ export function TreePanel({
           </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-          <p className="text-[13px] text-ink-2">这一栏还没做。</p>
-          <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
-            先把「笔记」那一栏做到能用，搜索和标签等模型稳了再接。
-          </p>
-        </div>
+        <ToolsPanel files={files} noteDocs={noteDocs} />
       )}
 
       <footer className="relative flex h-9 shrink-0 items-center gap-2 border-t border-line px-2 text-[11px] text-ink-3">
@@ -400,11 +426,22 @@ export function TreePanel({
           <IconChevron className="size-3 shrink-0 -rotate-90 text-ink-3/70" />
         </button>
         <span
-          className={`shrink-0 pr-1 ${save === 'error' ? 'font-medium text-ink' : ''}`}
+          className={`shrink-0 ${save === 'error' ? 'font-medium text-ink' : ''}`}
           title={saveError ?? undefined}
         >
           {SAVE_LABEL[save]}
         </span>
+
+        {/* 设置从原来的图标轨搬到这里 */}
+        <button
+          type="button"
+          onClick={onSettings}
+          title="设置"
+          aria-label="设置"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+        >
+          <IconSliders className="size-4" />
+        </button>
 
         {vaultMenu ? (
           <>
