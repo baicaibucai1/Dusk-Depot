@@ -257,21 +257,42 @@ class Num extends WidgetType {
   }
 }
 
-/** 任务框：`- [ ]` / `- [x]` 换成的小方框 */
+/** 任务框：`- [ ]` / `- [x]` 换成的小方框。点它直接改文档里的那个字符 */
 class Check extends WidgetType {
-  constructor(private readonly on: boolean) {
+  constructor(
+    private readonly on: boolean,
+    /** `[` 和 `]` 之间那个字符在文档里的位置（空格或 x） */
+    private readonly at: number,
+  ) {
     super()
   }
   override eq(other: Check) {
-    return other.on === this.on
+    return other.on === this.on && other.at === this.at
   }
   override toDOM() {
     const el = document.createElement('span')
     el.className = this.on ? 'dd-check dd-check-on' : 'dd-check'
+    el.setAttribute('role', 'checkbox')
+    el.setAttribute('aria-checked', this.on ? 'true' : 'false')
+    el.title = this.on ? '点一下取消' : '点一下勾上'
     if (this.on) {
       el.innerHTML =
         '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5"/></svg>'
     }
+
+    // 别让点击把光标塞进 widget 里；点一下就把 `[ ]` / `[x]` 改掉
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+    el.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const view = EditorView.findFromDOM(el)
+      if (!view) return
+      view.dispatch({ changes: { from: this.at, to: this.at + 1, insert: this.on ? ' ' : 'x' } })
+    })
+
     return el
   }
 }
@@ -450,7 +471,15 @@ function decorateLine(
   const ul = heading || quote ? null : /^(\s*)([-*+])\s+/.exec(text)
   if (task) {
     const end = line.from + task[0].length
-    out.push(lineRaw ? DIM.range(line.from, end) : Decoration.replace({ widget: new Check((task[2] ?? ' ').toLowerCase() === 'x') }).range(line.from, end))
+    if (lineRaw) {
+      out.push(DIM.range(line.from, end))
+    } else {
+      // `[` 后面那个字符（空格/x）在文档里的位置 —— 点方框就改它
+      const open = task[0].indexOf('[')
+      const markAt = line.from + (open >= 0 ? open + 1 : task[0].length - 2)
+      const on = (task[2] ?? ' ').toLowerCase() === 'x'
+      out.push(Decoration.replace({ widget: new Check(on, markAt) }).range(line.from, end))
+    }
   } else if (ol) {
     const start = line.from + (ol[1]?.length ?? 0)
     const end = line.from + ol[0].length

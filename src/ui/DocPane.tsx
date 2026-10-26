@@ -384,7 +384,8 @@ export function DocPane({
               const at = lines[line - 1]
               if (at === undefined) return
               const next = at.replace(
-                /^(\s*(?:[-*+]|\d{1,9})[.)]\s+\[)([ xX])(\]\s)/,
+                // 无序：`- ` / `* ` / `+ `；有序：`1. ` / `1) ` —— 两种都要认
+                /^(\s*(?:[-*+]\s+|\d{1,9}[.)]\s+)\[)([ xX])(\]\s)/,
                 (_, head: string, _mark: string, tail: string) => `${head}${checked ? 'x' : ' '}${tail}`,
               )
               if (next === at) return
