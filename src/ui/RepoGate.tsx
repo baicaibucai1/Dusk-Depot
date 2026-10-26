@@ -123,10 +123,16 @@ export function RepoGate({
         </div>
 
         {error ? (
-          <p className="mt-4 rounded-lg bg-surface-2 p-3 text-[12px] leading-relaxed text-ink">
-            <span className="font-medium">打不开：</span>
-            {error}
-          </p>
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-[#e3b7a8] bg-[#fdf2ed] p-3 text-[12px] leading-relaxed text-[#7a3a24]"
+          >
+            <p className="font-medium">打不开这个文件夹</p>
+            <p className="mt-1 break-words font-mono text-[11.5px] opacity-80">{error}</p>
+            <p className="mt-1.5 text-[11.5px] opacity-80">
+              换一个文件夹再试；或者先用上面的「打开示例库」，确认界面能用。
+            </p>
+          </div>
         ) : null}
       </div>
     </div>

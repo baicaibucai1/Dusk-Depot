@@ -80,9 +80,16 @@ export async function pickFsaDir(): Promise<Dir | null> {
     throw e
   }
 
-  // ⚠️ 存句柄单独一步：IndexedDB 被禁（隐私模式之类）时这里会抛，
-  //    必须让它冒到界面上，不能吞掉。
-  await idbSet(handle.name, handle)
+  /*
+   * 存句柄只是"下次还能找到它"。存不进去（隐私模式 / 内嵌 webview 禁用 IndexedDB）
+   * **不该把已经选好的文件夹作废** —— 本次照样能读写，只是下次要重选。
+   * 以前这里一抛就把用户打回选择页，看起来就是"选了没反应"。
+   */
+  try {
+    await idbSet(handle.name, handle)
+  } catch (e) {
+    console.warn('[dusk] 记不住这个文件夹（IndexedDB 不可用），本次仍可用', e)
+  }
   return handle
 }
 
@@ -112,8 +119,7 @@ export async function fsaGrant(handle: Dir): Promise<boolean> {
   return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted'
 }
 
-async function sub(dir: Dir, parts: string[], create: boolean): Promise<Dir> {
-  let cur = dir
+async function sub(dir: Dir, parts: string[], create: boolean): Promise<Dir> {  let cur = dir
   for (const seg of parts) {
     cur = await cur.getDirectoryHandle(seg, create ? { create: true } : undefined)
   }
@@ -124,6 +130,21 @@ function split(path: string): { parts: string[]; name: string } {
   const parts = path.split('/').filter(Boolean)
   const name = parts.pop() ?? path
   return { parts, name }
+}
+
+/** 依赖 / 构建 / 系统目录：笔记库里没有意义，走进去就是几千个文件 */
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.svn', 'target', 'dist', 'build', '.next', '.nuxt',
+  '.cache', '.venv', '__pycache__', '$RECYCLE.BIN', 'System Volume Information',
+])
+
+/** 一个仓库的条目上限。到顶就明说，别让人对着"正在读取…"干等 */
+const MAX_ENTRIES = 20000
+
+function tooBig(): Error {
+  return new Error(
+    `这个文件夹太大了（超过 ${MAX_ENTRIES} 项）。请选一个笔记文件夹，不要选整个磁盘或项目根目录。`,
+  )
 }
 
 export function fsaHost(handle: Dir): Host {
@@ -139,7 +160,11 @@ export function fsaHost(handle: Dir): Host {
         for await (const item of dir.values()) {
           const path = prefix ? `${prefix}/${item.name}` : item.name
           if (item.kind === 'directory') {
+            // 依赖 / 构建 / 系统目录：笔记库里不会有人要管它们，
+            // 走进去就是几千个文件，读半天还只是噪音
+            if (SKIP_DIRS.has(item.name)) continue
             out.push({ path, kind: 'dir', size: 0, mtime: 0 })
+            if (out.length > MAX_ENTRIES) throw tooBig()
             await walk(await dir.getDirectoryHandle(item.name), path)
           } else {
             /*
@@ -149,6 +174,7 @@ export function fsaHost(handle: Dir): Host {
              *    体积上限改由读取之后按字节数判断（见 App 的 readRepo）。
              */
             out.push({ path, kind: 'file', size: 0, mtime: 0 })
+            if (out.length > MAX_ENTRIES) throw tooBig()
           }
         }
       }

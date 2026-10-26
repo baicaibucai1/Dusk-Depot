@@ -243,7 +243,10 @@ export function App() {
   const adopt = useCallback(async (host: Host, ref: RepoRef) => {
     setWorking(`正在读取 ${host.label}…`)
     try {
+      // 出问题时这两行能在控制台告诉我们在哪一步停下
+      console.info('[dusk] 开始读取仓库', host.label)
       const loaded = await readRepo(host)
+      console.info('[dusk] 读完', Object.keys(loaded.files).length, '篇', loaded.dirs.length, '个目录')
       const snap: Snapshot = { files: loaded.files, dirs: loaded.dirs }
       baseline.current = snap
       setFiles(loaded.files)
@@ -295,8 +298,17 @@ export function App() {
         }
       }
 
+      /*
+       * 记不住这次打开的仓库（localStorage 满 / 被禁）不该把人打回选择页 ——
+       * 文件已经读进来了，先让人用上。下次重选一次就是了。
+       */
+      try {
+        setVaults(rememberVault({ label: describeRef(ref), ref }))
+      } catch (e) {
+        console.warn('[dusk] 记不住这次打开的仓库', e)
+      }
+
       setPhase({ t: 'ready', host, ref })
-      setVaults(rememberVault({ label: describeRef(ref), ref }))
     } finally {
       setWorking(null)
     }

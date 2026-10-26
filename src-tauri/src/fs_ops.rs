@@ -39,6 +39,15 @@ pub fn join(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, Str
   Ok(out)
 }
 
+/// 依赖 / 构建 / 系统目录：笔记库里没有意义，走进去就是几千个文件
+const SKIP_DIRS: &[&str] = &[
+  "node_modules", ".git", ".svn", "target", "dist", "build", ".next", ".nuxt",
+  ".cache", ".venv", "__pycache__", "$RECYCLE.BIN", "System Volume Information",
+];
+
+/// 一个仓库的条目上限。到顶就明说，别让人对着"正在读取…"干等
+const MAX_ENTRIES: usize = 20000;
+
 fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<Entry>) -> Result<(), String> {
   let rd = std::fs::read_dir(dir).map_err(|e| format!("读不了目录 {}：{e}", dir.display()))?;
 
@@ -60,12 +69,18 @@ fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<Entry>) -> Result<(),
       .unwrap_or(0);
 
     if meta.is_dir() {
+      if SKIP_DIRS.contains(&name.as_str()) {
+        continue;
+      }
       out.push(Entry {
         path: path.clone(),
         kind: "dir".into(),
         size: 0,
         mtime,
       });
+      if out.len() > MAX_ENTRIES {
+        return Err(too_big());
+      }
       walk(&item.path(), &path, out)?;
     } else {
       out.push(Entry {
@@ -74,10 +89,17 @@ fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<Entry>) -> Result<(),
         size: meta.len(),
         mtime,
       });
+      if out.len() > MAX_ENTRIES {
+        return Err(too_big());
+      }
     }
   }
 
   Ok(())
+}
+
+fn too_big() -> String {
+  format!("这个文件夹太大了（超过 {MAX_ENTRIES} 项）。请选一个笔记文件夹，不要选整个磁盘或项目根目录。")
 }
 
 pub fn list(root: &str) -> Result<Vec<Entry>, String> {
