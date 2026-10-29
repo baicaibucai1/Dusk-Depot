@@ -75,7 +75,10 @@ export function ToolsPanel({ files, noteDocs }: Props) {
     for (const p of paths) {
       for (const ref of outgoingRefs(files[p] ?? '')) {
         const hit =
-          ref.kind === 'wiki' ? resolveWiki(files, ref.value) : resolvePath(files, ref.value)
+          ref.kind === 'wiki'
+            ? resolveWiki(files, ref.value)
+            : // 相对路径要按"这一篇所在的目录"算，否则子目录里的 ../ 会被当成坏链
+              resolvePath(files, ref.value, p)
         if (!hit) n++
       }
     }

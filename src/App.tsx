@@ -520,7 +520,8 @@ export function App() {
         return
       }
 
-      const byPath = resolvePath(files, target)
+      // 相对路径按"从当前这一篇出发"算：子目录里的 ../ 也要认
+      const byPath = resolvePath(files, target, current ?? undefined)
       const found = byPath ?? resolveWiki(files, target)
       if (found) {
         openNote(found)

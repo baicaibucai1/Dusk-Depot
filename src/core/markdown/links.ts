@@ -77,12 +77,41 @@ export function refHits(files: FileMap, ref: Ref, target: string): boolean {
   return asMd === target || ref.value === target
 }
 
+/** 把相对路径归一：处理 `.` 与 `..`，返回从仓库根算的路径 */
+export function normalizeRel(base: string, rel: string): string {
+  const segs = (base ? base.split('/') : []).filter(Boolean)
+  for (const part of rel.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') segs.pop()
+    else segs.push(part)
+  }
+  return segs.join('/')
+}
+
 /** 把标准链接里的相对路径解析成仓库里的文件（不认就返回 null） */
-export function resolvePath(files: FileMap, href: string): string | null {
-  const clean = href.replace(/^\.\//, '').split('#')[0]?.trim() ?? ''
-  if (!clean) return null
-  if (files[clean]) return clean
-  if (files[`${clean}.md`]) return `${clean}.md`
+export function resolvePath(files: FileMap, href: string, from?: string): string | null {
+  const raw = href.split('#')[0]?.trim() ?? ''
+  if (!raw) return null
+
+  /*
+   * 相对路径按"从哪一篇出发"归一 —— `[回到开始](../开始这里.md)` 在子目录里是常事，
+   * 只去掉 `./` 是不够的。绝对写法（`/a/b.md`）也认。
+   * 两种候选都试：先按出发目录算，再按仓库根算（兼容老写法）。
+   */
+  const candidates: string[] = []
+  if (raw.startsWith('/')) candidates.push(raw.slice(1))
+  else {
+    const dir = from && from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
+    if (from) candidates.push(normalizeRel(dir, raw))
+    candidates.push(raw.replace(/^\.\//, ''))
+  }
+
+  for (const clean of candidates) {
+    // ⚠️ 不能用 `if (files[clean])` —— 空笔记（0 字节）的值是 ''，那是假值，
+    //    会被当成"这篇不存在"。刚新建还没写的笔记正好是这种。
+    if (Object.hasOwn(files, clean)) return clean
+    if (Object.hasOwn(files, `${clean}.md`)) return `${clean}.md`
+  }
   return null
 }
 
@@ -116,7 +145,7 @@ export function pendingLinksOf(files: FileMap, target: string): string[] {
   for (const r of outgoingRefs(files[target] ?? '')) {
     if (r.kind === 'wiki') {
       if (!known.has(r.value)) out.add(r.value)
-    } else if (!resolvePath(files, r.value)) {
+    } else if (!resolvePath(files, r.value, target)) {
       out.add(r.value)
     }
   }

@@ -5,6 +5,7 @@ import {
   pendingLinksOf,
   refHits,
   resolvePath,
+  normalizeRel,
   resolveWiki,
   wikiSection,
 } from '../../src/core/markdown/links'
@@ -96,5 +97,40 @@ describe('wikiSection', () => {
     expect(wikiSection('路径层#三条规矩')).toBe('三条规矩')
     expect(wikiSection('路径层')).toBeNull()
     expect(wikiSection('路径层#')).toBeNull()
+  })
+})
+
+describe('相对路径（../ 与绝对写法）', () => {
+  const files = {
+    '开始这里.md': '',
+    '项目/周计划.md': '# 周计划\n\n回到 [开始这里](../开始这里.md)。\n',
+    '项目/子/深.md': '[上级](../周计划.md) [根](../../开始这里.md)\n',
+  }
+
+  it('normalizeRel 处理 . 与 ..', () => {
+    expect(normalizeRel('', 'a/b.md')).toBe('a/b.md')
+    expect(normalizeRel('项目', '../开始这里.md')).toBe('开始这里.md')
+    expect(normalizeRel('项目/子', '../../开始这里.md')).toBe('开始这里.md')
+    expect(normalizeRel('项目', './周计划.md')).toBe('项目/周计划.md')
+  })
+
+  it('子目录里 ../ 能解析到根上的篇', () => {
+    expect(resolvePath(files, '../开始这里.md', '项目/周计划.md')).toBe('开始这里.md')
+    expect(resolvePath(files, '../周计划.md', '项目/子/深.md')).toBe('项目/周计划.md')
+    expect(resolvePath(files, '../../开始这里.md', '项目/子/深.md')).toBe('开始这里.md')
+  })
+
+  it('不带出发路径时仍按仓库根算（老写法不坏）', () => {
+    expect(resolvePath(files, '项目/周计划.md')).toBe('项目/周计划.md')
+    expect(resolvePath(files, './项目/周计划')).toBe('项目/周计划.md')
+  })
+
+  it('绝对写法 /a/b.md 也认', () => {
+    expect(resolvePath(files, '/项目/周计划.md')).toBe('项目/周计划.md')
+  })
+
+  it('往上跳过头就是解析不到，不瞎猜', () => {
+    expect(resolvePath(files, '../../../开始这里.md', '项目/周计划.md')).toBe('开始这里.md')
+    expect(resolvePath(files, '../不存在.md', '项目/周计划.md')).toBeNull()
   })
 })
