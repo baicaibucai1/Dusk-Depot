@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TreeNode } from '../core/model/library'
 import { labelOf } from '../core/model/path'
+import { TreeIcon } from './fileIcon'
+import { Files as FilesIcon } from 'lucide-react'
 import type { FileMap } from '../core/model/library'
 import type { ReactNode } from 'react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import {
   IconChevron,
-  IconFile,
-  IconFolder,
   IconFolderPlus,
-  IconMarkdown,
   IconMore,
   IconPin,
   IconPlus,
@@ -241,14 +240,14 @@ export function TreePanel({
               className={`size-3.5 shrink-0 text-ink-3 transition-transform ${expanded.has(n.path) ? 'rotate-90' : ''}`}
             />
           ) : null}
-          {isDir ? (
-            <IconFolder className="size-4 shrink-0 text-ink-3" />
-          ) : n.name.toLowerCase().endsWith('.md') ? (
-            // md 不带后缀：前面这个 M↓ 就是"它是 markdown"
-            <IconMarkdown className={`size-4 shrink-0 ${active ? 'text-green' : 'text-ink-3'}`} />
-          ) : (
-            <IconFile className={`size-4 shrink-0 ${active ? 'text-green' : 'text-ink-3'}`} />
-          )}
+          {/* 图标统一走 fileIcon.tsx：文件夹 / md 记号 / 按扩展名分 */}
+          <TreeIcon
+            path={n.path}
+            isDir={isDir}
+            open={isDir ? expanded.has(n.path) : false}
+            active={active}
+            className="shrink-0"
+          />
           <span className="truncate">{isDir ? n.name : labelOf(n.path)}</span>
           {pinned.includes(n.path) ? (
             <IconPin className="size-3 shrink-0 text-green/60" />
@@ -324,7 +323,7 @@ export function TreePanel({
       <div className="flex h-[38px] shrink-0 items-stretch gap-0.5 border-b border-line px-1" role="tablist" aria-label="左侧功能">
         {(
           [
-            { id: 'files', label: '文件', Icon: IconFile },
+            { id: 'files', label: '文件', Icon: FilesIcon },
             { id: 'tools', label: '工具', Icon: ToolTabIcon },
           ] as const
         ).map(({ id, label, Icon }) => {
