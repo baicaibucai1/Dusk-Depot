@@ -359,3 +359,12 @@ export const IconTrash = (p: P) => (
     <path d="M4.6 4.6 5.3 12.9a1 1 0 0 0 1 .9h3.4a1 1 0 0 0 1-.9l.7-8.3" />
   </Base>
 )
+
+/** markdown：一个圆角框，里面 M + 向下箭头（文件树里代替 .md 后缀） */
+export const IconMarkdown = (p: P) => (
+  <Base {...p}>
+    <rect x="1.8" y="3.2" width="12.4" height="9.6" rx="2" />
+    <path d="M4.3 10.3V6l1.6 2 1.6-2v4.3" />
+    <path d="M10.7 6.1v3.9M9.3 8.6l1.4 1.5 1.4-1.5" />
+  </Base>
+)

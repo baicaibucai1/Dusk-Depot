@@ -10,7 +10,7 @@ import {
 } from '../core/model/attach'
 import type { Host } from '../core/ports/host'
 import { hasImage, putImage } from './markdown/imageStore'
-import { nameOf } from '../core/model/path'
+import { labelOf, nameOf } from '../core/model/path'
 import { FormatBar } from './FormatBar'
 import { emptyTable, buildTable } from '../core/markdown/table'
 /** 块编辑器和 TipTap 一起懒加载 —— 首屏不该为它付钱 */
@@ -246,7 +246,7 @@ export function DocPane({
                     title={p}
                     className="max-w-[11rem] truncate"
                   >
-                    {nameOf(p)}
+                    {labelOf(p)}
                   </button>
                   <button
                     type="button"

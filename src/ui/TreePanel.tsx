@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TreeNode } from '../core/model/library'
+import { labelOf } from '../core/model/path'
 import type { FileMap } from '../core/model/library'
 import type { ReactNode } from 'react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -8,6 +9,7 @@ import {
   IconFile,
   IconFolder,
   IconFolderPlus,
+  IconMarkdown,
   IconMore,
   IconPin,
   IconPlus,
@@ -241,10 +243,13 @@ export function TreePanel({
           ) : null}
           {isDir ? (
             <IconFolder className="size-4 shrink-0 text-ink-3" />
+          ) : n.name.toLowerCase().endsWith('.md') ? (
+            // md 不带后缀：前面这个 M↓ 就是"它是 markdown"
+            <IconMarkdown className={`size-4 shrink-0 ${active ? 'text-green' : 'text-ink-3'}`} />
           ) : (
             <IconFile className={`size-4 shrink-0 ${active ? 'text-green' : 'text-ink-3'}`} />
           )}
-          <span className="truncate">{n.name}</span>
+          <span className="truncate">{isDir ? n.name : labelOf(n.path)}</span>
           {pinned.includes(n.path) ? (
             <IconPin className="size-3 shrink-0 text-green/60" />
           ) : null}

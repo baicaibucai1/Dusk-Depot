@@ -60,6 +60,14 @@ export function extOf(path: Path): string {
   return dot > 0 ? name.slice(dot) : ''
 }
 
+/**
+ * 界面上显示的名字：`.md` 不带后缀（前面另有 markdown 标记），其余照原样。
+ * 只影响显示 —— 路径、链接、落盘一律用真名。
+ */
+export function labelOf(path: Path): string {
+  return extOf(path).toLowerCase() === '.md' ? stemOf(path) : nameOf(path)
+}
+
 /** 去掉后缀的名字。和 extOf 用同一套判定，两个必须一致 */
 export function stemOf(path: Path): string {
   const name = nameOf(path)
