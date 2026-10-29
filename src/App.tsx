@@ -10,10 +10,12 @@ import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/r
 import { resolvePath, resolveWiki, titleOf, wikiSection } from './core/markdown/links'
 import { decodeBytes, encodeText } from './core/model/text'
 import {
+  iconsOf,
   isListable,
   parseVault,
   pruneMeta,
   serializeVault,
+  setIcon,
   VAULT_MARK,
   type FileMeta,
   type VaultMeta,
@@ -41,6 +43,7 @@ import { Aside } from './ui/Aside'
 import { SettingsDialog } from './ui/SettingsDialog'
 import { applySettings, loadSettings, resetSettings, saveSettings, type Settings } from './ui/settings'
 import { DocPane } from './ui/DocPane'
+import { SymbolPanel } from './ui/SymbolPanel'
 import { RepoGate } from './ui/RepoGate'
 import { PaneDivider } from './ui/PaneDivider'
 import { Resizer } from './ui/Resizer'
@@ -213,6 +216,10 @@ export function App() {
   const [save, setSave] = useState<SaveState>('clean')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [pins, setPins] = useState<string[]>([])
+  /** 自定义文件夹图标：路径 → emoji（存在 .zzq 的 files[path].icon） */
+  const [icons, setIcons] = useState<Record<string, string>>({})
+  /** 正在给哪个文件夹挑图标（null = 没开） */
+  const [iconTarget, setIconTarget] = useState<string | null>(null)
   /** 上次读到的 `.zzq` 原文。写回时以它为底合并，别把不认识的字段冲掉 */
   const vaultRaw = useRef('')
   const [gateBusy, setGateBusy] = useState(false)
@@ -288,6 +295,7 @@ export function App() {
       const meta = parseVault(raw)
       vaultRaw.current = raw
       setPins(meta.pins)
+      setIcons(iconsOf(meta))
 
       // 第一次把这个文件夹当仓库用：把账本建出来
       if (!loaded.hasMark) {
@@ -699,6 +707,13 @@ export function App() {
     return path
   }
 
+  /** 设 / 清某个文件夹的图标。存的是字符，不是图片路径 */
+  function setDirIcon(path: string, icon: string) {
+    const nextMeta = setIcon(parseVault(vaultRaw.current), path, icon)
+    setIcons(iconsOf(nextMeta))
+    void writeVaultMeta({ files: nextMeta.files })
+  }
+
   function createFolder(dir: string): string | null {
     const path = uniquePath(folderPath(dir, '新建文件夹'), taken)
     setDirs((prev) => [...prev, path])
@@ -732,6 +747,7 @@ export function App() {
       const files: Record<string, FileMeta> = {}
       for (const [p, v] of Object.entries(meta.files)) files[to(p)] = v
       setPins(nextPins)
+      setIcons(iconsOf({ ...meta, files }))
       void writeVaultMeta({ pins: nextPins, files })
     }
   }
@@ -767,6 +783,7 @@ export function App() {
     )
     // 被删掉的（含整棵子树里的）置顶和文件属性要一起清掉，否则账本里会留悬空条目
     const nextMeta = pruneMeta(parseVault(vaultRaw.current), r.removed)
+    setIcons(iconsOf(nextMeta))
     if (nextMeta.pins.length !== pins.length || Object.keys(nextMeta.files).length > 0) {
       setPins(nextMeta.pins)
       void writeVaultMeta({ pins: nextMeta.pins, files: nextMeta.files })
@@ -820,6 +837,9 @@ export function App() {
             onRename={doRename}
             onMove={doMove}
             onDelete={doDelete}
+            icons={icons}
+            onSetIcon={setDirIcon}
+            onPickIcon={setIconTarget}
             pinned={pins}
             onTogglePin={togglePin}
             repoLabel={describeRef(phase.ref)}
@@ -944,6 +964,29 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
           onReset={() => setSettings(resetSettings())}
         />
+      ) : null}
+
+      {/* 给文件夹挑图标：点外面 / Esc 关掉；选完立刻写进 .zzq */}
+      {iconTarget ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-ink/25 p-6"
+          onClick={() => setIconTarget(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setIconTarget(null)
+          }}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <SymbolPanel
+              title={`${iconTarget.split('/').pop() ?? iconTarget} 的图标`}
+              current={icons[iconTarget] ?? null}
+              onClose={() => setIconTarget(null)}
+              onPick={(ch) => {
+                setDirIcon(iconTarget, ch)
+                setIconTarget(null)
+              }}
+            />
+          </div>
+        </div>
       ) : null}
     </div>
   )

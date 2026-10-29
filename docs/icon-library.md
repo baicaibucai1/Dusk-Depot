@@ -57,3 +57,37 @@ ui/fileIcon.tsx          语义 → 图标：文件夹 folder/folder-open，md �
 
 Lucide — ISC License，https://github.com/lucide-icons/lucide
 本项目的 `assets/` 与源码中不再复制的图标，均通过 `lucide-react` 依赖引入。
+
+---
+
+## 第二层：给用户用的符号（2026-10-29 定）
+
+这个应用里有**两层**图标，别混：
+
+| | 第一层：界面图标 | 第二层：用户符号 |
+|---|---|---|
+| 谁用 | 程序的按钮、状态、文件类型 | 用户自己，插进正文 / 当文件夹图标 |
+| 用什么 | Lucide（SVG，ISC） | **彩色 emoji 字符**（系统字体） |
+| 存什么 | 不存在任何地方，是代码 | 存字符本身（`.md` 里 / `.zzq` 的 `icon` 字段） |
+| 能换吗 | 换库要改 `fileIcon.tsx` | 用户随时换，选一个就是 |
+
+### 第二层为什么必须是字符，不能是 SVG
+
+因为「插进正文」的本质是**可移植**：那一行 `.md` 得在 VS Code、GitHub、手机上打开还成立。
+所以能存下的只有字符。图片/SVG 一进去，纯文本编辑器里就是一堆路径，反而更脏。
+
+顺带一个推论：**描边风格的 emoji（OpenMoji 之类）只在本程序里成立**。
+它只是换画法，文件里仍是 `🚀` 这个码位，别人打开看到的还是彩色 emoji。
+想"到哪都是描边样"只能存 `:rocket:` 短码，但那样纯文本里就是短码 —— 更脏。所以不采用。
+
+### 代价（写清楚，免得以后当 bug 报）
+
+- 同一个 emoji 在 Windows / macOS / 安卓上画得不一样 —— 字体的事，我们不打包字体
+- 包体 +12.7 kB（gzip +5.9），全是符号目录的数据（12 类 / 180 个）
+- 不做后缀级文件图标、不收品牌 logo（理由见上一节）
+
+### 代码在哪
+
+- `src/core/model/symbols.ts` —— 符号目录（纯数据 + `searchSymbols` / `withRecent`，可单测）
+- `src/ui/SymbolPanel.tsx` —— 面板组件，正文插入与文件夹图标共用
+- `src/core/model/vault.ts` —— `FileMeta.icon` + `iconsOf` / `setIcon`（存 `.zzq`，不是新文件）

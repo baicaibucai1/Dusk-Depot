@@ -7,6 +7,7 @@
  * 布局：卡片居中，允许换行；整条可以收起成一个小胶囊。
  */
 import { useEffect, useRef, useState } from 'react'
+import { SymbolPanel } from './SymbolPanel'
 import {
   IconBold,
   IconBrackets,
@@ -21,6 +22,7 @@ import {
   IconMathBlock,
   IconQuote,
   IconSigma,
+  IconSmiley,
   IconStrike,
   IconTable,
   IconTableEdit,
@@ -195,7 +197,7 @@ function TableSizePicker({ onPick }: { onPick: (rows: number, cols: number) => v
 }
 
 export function FormatBar(p: FormatProps) {
-  const [picker, setPicker] = useState<'heading' | 'table' | 'link' | null>(null)
+  const [picker, setPicker] = useState<'heading' | 'table' | 'link' | 'symbol' | null>(null)
   const close = () => setPicker(null)
 
   // 收起态：只留一个小胶囊
@@ -218,7 +220,7 @@ export function FormatBar(p: FormatProps) {
     )
   }
 
-  const pick = (kind: 'heading' | 'table' | 'link') => () =>
+  const pick = (kind: 'heading' | 'table' | 'link' | 'symbol') => () =>
     setPicker((v) => (v === kind ? null : kind))
 
   return (
@@ -376,6 +378,30 @@ export function FormatBar(p: FormatProps) {
         <button type="button" disabled={p.disabled} title="链接" aria-label="链接" className={BTN} onClick={() => p.onWrap('[', '](https://)', '文字')}>
           <IconLink className="size-4" />
         </button>
+
+        <div className="relative">
+          <button
+            type="button"
+            disabled={p.disabled}
+            title="插入符号"
+            aria-label="插入符号"
+            aria-expanded={picker === 'symbol'}
+            onClick={pick('symbol')}
+            className={BTN}
+          >
+            <IconSmiley className="size-4" />
+          </button>
+
+          <Popover open={picker === 'symbol'} onClose={close}>
+            <SymbolPanel
+              onClose={close}
+              onPick={(ch) => {
+                p.onInsert(ch)
+                close()
+              }}
+            />
+          </Popover>
+        </div>
       </div>
 
       {/* 收起按钮固定贴在右边缘，卡片换行时它不会跟着乱跑 */}

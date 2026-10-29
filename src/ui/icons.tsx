@@ -368,3 +368,12 @@ export const IconMarkdown = (p: P) => (
     <path d="M10.7 6.1v3.9M9.3 8.6l1.4 1.5 1.4-1.5" />
   </Base>
 )
+
+/** 符号：一个笑脸（插 emoji 用） */
+export const IconSmiley = (p: P) => (
+  <Base {...p}>
+    <circle cx="8" cy="8" r="5.8" />
+    <path d="M5.7 9.3a2.8 2.8 0 0 0 4.6 0" />
+    <path d="M6.2 6.2v.6M9.8 6.2v.6" />
+  </Base>
+)

@@ -36,6 +36,13 @@ type Props = {
   onMove: (path: string, destDir: string) => string | null
   onDelete: (path: string) => void
 
+  /** 自定义图标：路径 → emoji 字符（存在 .zzq 里） */
+  icons: Record<string, string>
+  /** 给某个文件夹设图标（空字符串 = 清除） */
+  onSetIcon: (path: string, icon: string) => void
+  /** 打开图标选择器 */
+  onPickIcon: (path: string) => void
+
   /** 置顶的路径，越靠前越上面 */
   pinned: string[]
   onTogglePin: (path: string) => void
@@ -96,6 +103,9 @@ export function TreePanel({
   onRename,
   onMove,
   onDelete,
+  icons,
+  onSetIcon,
+  onPickIcon,
   pinned,
   onTogglePin,
   repoLabel,
@@ -186,6 +196,14 @@ export function TreePanel({
           label: pinned.includes(path) ? '取消置顶' : '置顶',
           onSelect: () => onTogglePin(path),
         },
+        ...(isDir
+          ? [
+              { label: '设置图标…', onSelect: () => onPickIcon(path) },
+              ...(icons[path]
+                ? [{ label: '清除图标', onSelect: () => onSetIcon(path, '') }]
+                : []),
+            ]
+          : []),
         { label: '删除', danger: true, onSelect: () => setPendingDelete(path) },
       )
     }
@@ -240,14 +258,24 @@ export function TreePanel({
               className={`size-3.5 shrink-0 text-ink-3 transition-transform ${expanded.has(n.path) ? 'rotate-90' : ''}`}
             />
           ) : null}
-          {/* 图标统一走 fileIcon.tsx：文件夹 / md 记号 / 按扩展名分 */}
-          <TreeIcon
-            path={n.path}
-            isDir={isDir}
-            open={isDir ? expanded.has(n.path) : false}
-            active={active}
-            className="shrink-0"
-          />
+          {/* 设过自定义图标就显示那个字符；否则走 fileIcon.tsx（文件夹 / md 记号 / 按扩展名分） */}
+          {isDir && icons[n.path] ? (
+            <span
+              data-dd-diricon={n.path}
+              aria-hidden
+              className="grid w-4 shrink-0 place-items-center text-[13px] leading-none"
+            >
+              {icons[n.path]}
+            </span>
+          ) : (
+            <TreeIcon
+              path={n.path}
+              isDir={isDir}
+              open={isDir ? expanded.has(n.path) : false}
+              active={active}
+              className="shrink-0"
+            />
+          )}
           <span className="truncate">{isDir ? n.name : labelOf(n.path)}</span>
           {pinned.includes(n.path) ? (
             <IconPin className="size-3 shrink-0 text-green/60" />

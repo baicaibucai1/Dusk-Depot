@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>符号集原型 · 给用户用的那一层</title>
+<style>
+  :root{
+    --paper:#f5f7f6; --surface:#fff; --surface-2:#eef1ef; --line:#e3e7e5;
+    --ink:#10231c; --ink-2:#4a5a53; --ink-3:#8b9a93;
+    --green:#0e9b66; --green-soft:#e9f7f0; --green-deep:#054e38;
+    --bad:#b4342b;
+    --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+    --sym:'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','PingFang SC',sans-serif;
+    --emoji:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:14px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:32px 24px 72px}
+  h1{font-size:21px;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:12.5px;margin:0 0 20px}
+
+  /* ── 风格切换 ── */
+  .styles{display:flex;gap:8px;margin:0 0 18px;flex-wrap:wrap}
+  .styles button{flex:1;min-width:200px;text-align:left;padding:11px 14px;border-radius:11px;
+    border:1px solid var(--line);background:var(--surface);cursor:pointer;transition:.12s}
+  .styles button:hover{border-color:#cfd8d3}
+  .styles button.on{border-color:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
+  .styles b{display:block;font-size:13px;font-weight:600;margin-bottom:2px}
+  .styles span{font-size:11.5px;color:var(--ink-3);line-height:1.5;display:block}
+  .styles em{font-style:normal;font-size:15px;float:right;margin-left:8px}
+
+  /* ── 三栏 ── */
+  .grid{display:grid;grid-template-columns:326px 1fr 248px;gap:14px;align-items:start}
+  @media (max-width:960px){.grid{grid-template-columns:1fr}}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+  .card-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);
+    font-size:12px;color:var(--ink-2)}
+  .card-h .t{font-weight:600;color:var(--ink)}
+  .card-h .r{margin-left:auto;font-size:11px;color:var(--ink-3)}
+
+  /* 面板 */
+  .mode{display:flex;gap:2px;background:var(--surface-2);border-radius:8px;padding:2px;margin:9px 10px}
+  .mode button{flex:1;height:26px;border:0;background:none;border-radius:6px;font-size:12px;
+    color:var(--ink-3);cursor:pointer;font:inherit}
+  .mode button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(16,35,28,.1)}
+  .search{margin:0 10px 8px;display:flex;align-items:center;gap:6px;height:30px;padding:0 9px;
+    border:1px solid var(--line);border-radius:8px;color:var(--ink-3)}
+  .search input{border:0;outline:0;background:none;flex:1;min-width:0;font:inherit;color:var(--ink);font-size:13px}
+  .cats{display:flex;gap:4px;flex-wrap:wrap;padding:0 10px 9px}
+  .cats button{height:23px;padding:0 8px;border:0;border-radius:20px;background:var(--surface-2);
+    color:var(--ink-3);font-size:11.5px;cursor:pointer;font:inherit}
+  .cats button.on{background:var(--green-soft);color:var(--green-deep)}
+  .pane{height:330px;overflow-y:auto;padding:2px 8px 12px;border-top:1px solid var(--line)}
+  .sechead{font-size:10.5px;color:var(--ink-3);padding:9px 4px 4px;letter-spacing:.04em}
+  .cells{display:grid;grid-template-columns:repeat(9,1fr);gap:2px}
+  .cell{display:grid;place-items:center;height:30px;border:0;background:none;border-radius:6px;
+    cursor:pointer;font-size:16px;line-height:1;transition:background .1s}
+  .cell:hover{background:var(--surface-2)}
+  .cell:active{background:var(--green-soft)}
+  .cell .g{font-family:var(--sym)}
+  .cell .e{font-family:var(--emoji)}
+  .om{display:inline-block;width:17px;height:17px;background:currentColor;
+    -webkit-mask:var(--u) center/contain no-repeat;mask:var(--u) center/contain no-repeat}
+  .empty{padding:26px 8px;text-align:center;font-size:12px;color:var(--ink-3)}
+
+  /* 中栏：文档 */
+  .doc{padding:22px 26px 26px;min-height:270px}
+  .doc h3{margin:0 0 4px;font-size:17px;font-weight:600}
+  .doc .meta{font-size:11.5px;color:var(--ink-3);margin-bottom:14px}
+  .doc p{margin:0 0 11px;font-size:15px;line-height:1.85}
+  .doc .flows{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0}
+  .doc .flows span{font-size:13px;color:var(--ink-2);background:var(--surface-2);
+    border-radius:7px;padding:3px 9px;font-family:var(--sym)}
+  .src{border-top:1px solid var(--line);background:#fbfcfb;padding:12px 16px;font-family:var(--mono);
+    font-size:11.5px;line-height:1.75;color:var(--ink-2);white-space:pre-wrap;word-break:break-all;max-height:150px;overflow:auto}
+  .src .hint{color:var(--ink-3)}
+  .caret{display:inline-block;width:1.5px;height:13px;background:var(--green);vertical-align:-2px;
+    animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* 右栏：树 */
+  .tree{padding:7px 6px 10px;font-size:13px}
+  .trow{display:flex;align-items:center;gap:6px;height:28px;border-radius:6px;padding:0 8px;
+    color:var(--ink-2);cursor:pointer}
+  .trow:hover{background:var(--surface-2)}
+  .trow.act{background:var(--green-soft);color:var(--ink)}
+  .trow .tw{width:16px;flex:0 0 16px;display:grid;place-items:center;font-size:15px;line-height:1}
+  .trow .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trow .tk{margin-left:auto;font-size:10px;color:var(--ink-3)}
+  .slotline{padding:9px 12px 12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink-3);line-height:1.7}
+  .zoom{display:flex;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-3)}
+  .zoom i{display:grid;place-items:center;font-style:normal;line-height:1}
+  .zoom .z16{width:16px;height:16px;font-size:15px}
+  .zoom .z32{width:32px;height:32px;font-size:31px}
+  .zoom .om{width:16px;height:16px}
+  .zoom .om.big{width:32px;height:32px}
+
+  /* 底部：代价 */
+  table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;margin-top:10px}
+  td,th{padding:9px 13px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:12.5px}
+  tr:last-child td{border-bottom:0}
+  th{background:var(--surface-2);font-size:11px;font-weight:500;color:var(--ink-3);letter-spacing:.04em}
+  td.k{width:150px;font-weight:500}
+  h2{font-size:14px;font-weight:600;margin:30px 0 6px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h2 span{font-weight:400;color:var(--ink-3);font-size:12px;margin-left:8px}
+  .note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--green);
+    border-radius:10px;padding:13px 16px;margin:12px 0;font-size:12.5px;color:var(--ink-2);line-height:1.75}
+  .note b{color:var(--ink)}
+  .warn{border-left-color:var(--bad)}
+  .mono{font-family:var(--mono);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>符号集原型 · 给用户用的那一层</h1>
+  <p class="sub">这一层跟界面图标（Lucide）不是一回事：它能<b>插进正文变成文本</b>，也能<b>当作文件夹图标</b>。下面三套风格用的都是同一批符号，只换渲染方式。</p>
+
+  <div class="styles" id="styles">
+    <button data-style="mono" class="on"><b>单色字符（Unicode）<em>→ ★ ✓</em></b><span>零依赖。字符本身就是文本，任何编辑器都认，进 git diff 也干净。</span></button>
+    <button data-style="color"><b>彩色 emoji<em style="font-family:var(--emoji)">🚀 📌</em></b><span>系统字体直接渲染，同样零依赖。表达力最强，但 16px 会糊。</span></button>
+    <button data-style="openmoji"><b>OpenMoji 单色描边<em><span class="om" style="--u:url(/assets/symbol-demo/openmoji/1F680.svg)"></span></em></b><span>emoji 的语义 + 描边风格。要打包 SVG，CC BY-SA 4.0。</span></button>
+  </div>
+
+  <div class="grid">
+    <!-- 面板 -->
+    <div class="card">
+      <div class="card-h"><span class="t">符号面板</span><span class="r" id="count"></span></div>
+      <div class="mode" id="mode">
+        <button data-mode="insert" class="on">插入正文</button>
+        <button data-mode="folder">设为文件夹图标</button>
+      </div>
+      <label class="search"><span>⌕</span><input id="q" placeholder="搜符号（试：箭 / 星 / 勾 / 任务）" aria-label="搜符号"></label>
+      <div class="cats" id="cats"></div>
+      <div class="pane" id="pane"></div>
+    </div>
+
+    <!-- 文档 -->
+    <div class="card">
+      <div class="card-h"><span class="t">项目/周计划</span><span class="r">markdown · 15px 正文</span></div>
+      <div class="doc">
+        <h3 id="docTitle">本周</h3>
+        <div class="meta">点左边任何一个符号，它会插到光标位置 ↓</div>
+        <p id="line1"></p>
+        <p id="line2"></p>
+        <div class="flows" id="flows"></div>
+      </div>
+      <div class="src" id="src"></div>
+    </div>
+
+    <!-- 树 -->
+    <div class="card">
+      <div class="card-h"><span class="t">文件</span><span class="r">16px</span></div>
+      <div class="tree" id="tree"></div>
+      <div class="zoom">
+        <span>实际大小</span>
+        <i class="z16" id="z16"></i>
+        <i class="z32" id="z32"></i>
+        <span id="zoomName" style="margin-left:auto"></span>
+      </div>
+      <div class="slotline" id="slotline"></div>
+    </div>
+  </div>
+
+  <h2>三套的账 <span>数字是刚查的，不是估的</span></h2>
+  <table>
+    <thead><tr><th>方案</th><th>协议</th><th>要打包多大</th><th>挂在正文里是什么</th><th>16px 糊不糊</th></tr></thead>
+    <tbody>
+      <tr><td class="k">单色 Unicode</td><td>无（Unicode 字符本身）</td><td class="mono">0 KB</td><td>真字符，复制粘贴到任何地方都是它</td><td>不糊，是字形</td></tr>
+      <tr><td class="k">彩色 emoji</td><td>无（系统字体）</td><td class="mono">0 KB</td><td>真字符（码位）</td><td><b style="color:var(--bad)">糊</b>，16px 五官全丢</td></tr>
+      <tr><td class="k">OpenMoji 描边</td><td>CC BY-SA 4.0</td><td class="mono">≈0.7 MB / 200 个<br>≈13 MB / 全量 4000+</td><td>只是字符 + 一张图，<b>离开本程序就变回彩色 emoji</b></td><td>不糊，但描边要重调</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>这里最关键的一条，上面表格第三行后半句：</b>
+    OpenMoji 只是"换一套画法"，正文里存的仍然是 <span class="mono">🚀</span> 这个码位。
+    也就是说 —— 用户把文档发给别人、用别的编辑器打开，看到的还是<b>彩色 emoji</b>，不是我们的描边版。
+    想让它"到哪都是描边样"，只能存 <span class="mono">:rocket:</span> 这种短码 + 自己渲染，
+    但那样纯文本编辑器里就是一堆短码，反而更脏。
+  </div>
+
+  <div class="note warn">
+    <b>我的判断（要你拍板）：正文那一层只能用 Unicode 字符，不要试图用图片。</b>
+    因为"能插进文本"这个要求的本质是<b>可移植</b>：这份 .md 要能在 VS Code、GitHub、手机上打开还成立。
+    SVG 做不到这件事，只有字符能。
+    所以真正的选择不是"用哪套图标"，而是<b>"面板里放哪些字符、怎么分类、能不能搜"</b>。
+  </div>
+
+  <h2>那"另一套符号集"到底指什么 <span>三种理解，做法完全不同</span></h2>
+  <table>
+    <thead><tr><th>理解</th><th>要做什么</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td class="k">A 给用户一个符号面板</td><td>按类目整理几百个 Unicode 字符 + 搜索 + 最近使用；点一下插进正文</td><td>纯前端，一个数据文件</td></tr>
+      <tr><td class="k">B 让用户换文件夹图标</td><td>`.dusk/icons.json` 存"路径 → 字符"；树里 16px 渲染；同面板供选择</td><td>一个小配置层，可删可重建</td></tr>
+      <tr><td class="k">C 引入一整套图形符号库</td><td>再打包一套 SVG（OpenMoji / Material Symbols / 自定义），供图标选择器用</td><td>包体 + 协议 + 描边风格要重调</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>这三件不冲突，但顺序有讲究：</b>A 和 B 是"让用户能用"，C 是"更好看"。先做 A+B 就能用起来；C 可以后加，而且加了不影响前两步存下的数据 —— 因为存的是字符，不是图片。</div>
+</div>
+
+<script>
+/* ── 数据 ──────────────────────────────────────────────────
+   单色：真字符。彩色：真字符。描边：字符 + 同名 SVG（有就换，没有就退字符）
+   hex 是 OpenMoji 文件名，用来做 mask 图
+   ──────────────────────────────────────────────────────── */
+const MONO = {
+  '箭头': ['→','←','↑','↓','⇒','⇐','⇔','↔','↗','↘','↙','↖','⟶','↩','↪','⤴','⤵','⇢','⇠','⟷','⇄','⇅','↺','↻'],
+  '几何': ['●','○','■','□','▲','△','▼','▽','◆','◇','★','☆','▪','▫','⬤','◼','◻','◉','◎','◈','▣','▤','▥','▦'],
+  '勾选': ['✓','✔','✗','✘','☐','☑','☒','⊘','⊗','⊕','⊞','⊟','⌧','⍻','☓','✓︎'],
+  '星标': ['★','☆','✦','✧','✩','✪','✫','✬','✭','✮','✯','✰','⚑','⚐','❖','⁂'],
+  '数学': ['±','×','÷','≈','≠','≤','≥','∞','∑','√','∛','∂','∆','∇','∫','∝','∴','∵','∈','∉','⊂','⊃','⊥','∥'],
+  '序号': ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑴','⑵','⑶','⑷','⑸','Ⅰ','Ⅱ','Ⅲ','Ⅳ','Ⅴ','Ⅵ','Ⅶ','Ⅷ','Ⅸ'],
+  '框线': ['─','│','┌','┐','└','┘','├','┤','┬','┴','┼','═','║','╔','╗','╚','╝','▏','▎','▍','▌','▐','█','░'],
+  '分隔': ['—','–','…','⋯','·','•','‥','︙','※','¶','§','†','‡','〰','〜','⁃','◌','○'],
+  '标点': ['「','」','『','』','【','】','〈','〉','《','》','〔','〕','〖','〗','“','”','‘','’','·','：'],
+  '单位': ['¥','$','€','£','¢','₩','₹','℃','℉','‰','′','″','№','℡','µ','Ω','Å','¥','©','®','™','°'],
+  '天气': ['☀','☁','☂','☃','☾','☽','❄','☘','⚡','☢','☣','♻','⚙','⚔','⚖','⚗','⚰','⚱','⛰','⛲'],
+};
+
+const EMOJI = [
+  ['🚀','1F680','火箭','工作'],['📌','1F4CC','图钉','工作'],['🎯','1F3AF','靶心','工作'],
+  ['📝','1F4DD','备忘','工作'],['📄','1F4C4','文档','工作'],['📚','1F4DA','书堆','工作'],
+  ['🗂','1F5C2','文件夹','工作'],['✅','2705','完成','工作'],['☑','2611','勾选','工作'],
+  ['📋','1F4CB','清单','工作'],['🗓','1F5D3','日历','工作'],['⏰','23F0','闹钟','工作'],
+  ['📎','1F4CE','回形针','工作'],['📦','1F4E6','包裹','工作'],['🏷','1F3F7','标签','工作'],
+  ['💡','1F4A1','灯泡','想法'],['🧠','1F9E0','大脑','想法'],['🔍','1F50D','放大镜','想法'],
+  ['🧩','1F9E9','拼图','想法'],['✨','2728','闪光','想法'],['🧪','1F9EA','试管','想法'],
+  ['🎨','1F3A8','调色板','想法'],
+  ['🏠','1F3E0','房子','生活'],['🌱','1F331','幼苗','生活'],['☕','2615','咖啡','生活'],
+  ['🌙','1F319','月亮','生活'],['🎵','1F3B5','音符','生活'],['📷','1F4F7','相机','生活'],
+  ['⭐','2B50','星星','生活'],['🔖','1F516','书签','生活'],['🧭','1F9ED','罗盘','生活'],
+  ['🔥','1F525','火','生活'],['⚙','2699','齿轮','生活'],['⚠','26A0','警告','生活'],
+  ['❗','2757','感叹','生活'],['📅','1F4C5','日程','生活'],
+];
+
+/* ── 状态 ── */
+let style = 'mono';
+let mode = 'insert';
+let cat = '全部';
+let q = '';
+let activeFolder = '项目';
+let folderIcon = { '项目':'', '素材':'', '日记':'' };
+let docLines = [
+  '把「项目」这篇排期拉一遍，卡在两处。',
+  '想法先记在下面，别丢。',
+];
+let flows = ['待确认', '本周必做'];
+
+/* ── 渲染 ── */
+const pane = document.getElementById('pane');
+const cats = document.getElementById('cats');
+const countEl = document.getElementById('count');
+
+function catsOf() {
+  const monoCats = Object.keys(MONO);
+  const emojiCats = ['工作','想法','生活'];
+  return ['全部', ...monoCats, ...emojiCats];
+}
+
+function symHtml(ch, hex) {
+  if (style === 'openmoji' && hex) {
+    return '<span class="om" style="--u:url(/assets/symbol-demo/openmoji/' + hex + '.svg)"></span>';
+  }
+  if (style === 'color') return '<span class="e">' + ch + '</span>';
+  return '<span class="g">' + ch + '</span>';
+}
+
+function matches(name, group) {
+  if (!q) return true
+  const t = q.trim()
+  return name.includes(t) || group.includes(t)
+}
+
+function render() {
+  cats.innerHTML = catsOf()
+    .map((c) => '<button data-cat="' + c + '"' + (c === cat ? ' class="on"' : '') + '>' + c + '</button>')
+    .join('')
+
+  let html = ''
+  let n = 0
+
+  const wantMono = cat === '全部' || MONO[cat]
+  if (wantMono) {
+    for (const [group, list] of Object.entries(MONO)) {
+      if (cat !== '全部' && cat !== group) continue
+      const hits = list.filter(() => matches('', group))
+      if (!hits.length) continue
+      html += '<div class="sechead">' + group + '</div><div class="cells">'
+      for (const ch of hits) {
+        html += '<button class="cell" data-ch="' + ch + '" data-hex="" title="' + ch + '">' + symHtml(ch) + '</button>'
+        n++
+      }
+      html += '</div>'
+    }
+  }
+
+  const wantEmoji = cat === '全部' || ['工作','想法','生活'].includes(cat)
+  if (wantEmoji) {
+    for (const [ch, hex, name, group] of EMOJI) {
+      if (cat !== '全部' && cat !== group) continue
+      if (!matches(name, group)) continue
+      if (html.endsWith('</div>') && !html.includes('data-group="' + group + '"')) {
+        html += '<div class="sechead" data-group="">' + group + ' · emoji</div><div class="cells">'
+      }
+      html += '<button class="cell" data-ch="' + ch + '" data-hex="' + hex + '" title="' + name + '">' + symHtml(ch, hex) + '</button>'
+      n++
+    }
+    html += '</div>'
+  }
+
+  pane.innerHTML = html || '<div class="empty">没有匹配的符号。<br>换个词试试。</div>'
+  countEl.textContent = n + ' 个'
+}
+
+function renderDoc() {
+  const caret = '<span class="caret"></span>'
+  document.getElementById('line1').innerHTML = esc(docLines[0]) + caret
+  document.getElementById('line2').innerHTML = esc(docLines[1] || '')
+  document.getElementById('flows').innerHTML = flows
+    .map((f) => '<span>' + esc(f) + '</span>')
+    .join('')
+
+  const src = [
+    '# 本周',
+    '',
+    '## 排期',
+    '',
+    '| 事项 | 截止 |',
+    '| :--- | --: |',
+    '| ' + flows[0] + ' | 11-02 |',
+    '| ' + (flows[1] || '—') + ' | 11-05 |',
+    '',
+    '> ' + docLines[0],
+    docLines[1] ? docLines[1] : '',
+  ].join('\n')
+  document.getElementById('src').innerHTML =
+    '<span class="hint"># 这一块是文件里真实的样子（点符号就变）</span>\n' + esc(src)
+}
+
+function renderTree() {
+  const dirs = ['项目', '素材', '日记']
+  document.getElementById('tree').innerHTML = dirs
+    .map((d) => {
+      const icon = folderIcon[d]
+      const glyph = icon
+        ? (icon.hex && style === 'openmoji'
+            ? '<span class="om" style="--u:url(/assets/symbol-demo/openmoji/' + icon.hex + '.svg)"></span>'
+            : '<span style="font-family:' + (style === 'color' ? 'var(--emoji)' : 'var(--sym)') + '">' + icon.ch + '</span>')
+        : '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.2h3.3l1.1 1.4h7.6v8H2z"/></svg>'
+      return (
+        '<div class="trow' + (d === activeFolder ? ' act' : '') + '" data-dir="' + d + '">' +
+        '<span class="tw">' + glyph + '</span>' +
+        '<span class="tn">' + d + '</span>' +
+        '<span class="tk">' + (folderIcon[d] ? '自定义' : '') + '</span>' +
+        '</div>'
+      )
+    })
+    .join('')
+
+  const cur = folderIcon[activeFolder]
+  const z16 = document.getElementById('z16')
+  const z32 = document.getElementById('z32')
+  if (cur) {
+    const h = cur.hex && style === 'openmoji'
+      ? '<span class="om" style="--u:url(/assets/symbol-demo/openmoji/' + cur.hex + '.svg)"></span>'
+      : '<span style="font-family:' + (style === 'color' ? 'var(--emoji)' : 'var(--sym)') + '">' + cur.ch + '</span>'
+    const big = cur.hex && style === 'openmoji'
+      ? '<span class="om big" style="--u:url(/assets/symbol-demo/openmoji/' + cur.hex + '.svg)"></span>'
+      : '<span style="font-family:' + (style === 'color' ? 'var(--emoji)' : 'var(--sym)') + '">' + cur.ch + '</span>'
+    z16.innerHTML = h
+    z32.innerHTML = big
+  } else {
+    z16.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.2h3.3l1.1 1.4h7.6v8H2z"/></svg>'
+    z32.innerHTML = '<svg viewBox="0 0 16 16" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.2h3.3l1.1 1.4h7.6v8H2z"/></svg>'
+  }
+  document.getElementById('zoomName').textContent = activeFolder
+  document.getElementById('slotline').innerHTML =
+    '存下来只有一行：<br><span class="mono">.dusk/icons.json</span><br><span class="mono">{"' +
+    activeFolder + '": ' + JSON.stringify(cur ? cur.ch : '') + '}</span><br>删了这个文件，图标回到默认，笔记一个字节不动。'
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+}
+
+/* ── 交互 ── */
+document.getElementById('styles').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-style]')
+  if (!b) return
+  style = b.dataset.style
+  document.querySelectorAll('#styles button').forEach((x) => x.classList.toggle('on', x === b))
+  render(); renderTree()
+})
+
+document.getElementById('mode').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]')
+  if (!b) return
+  mode = b.dataset.mode
+  document.querySelectorAll('#mode button').forEach((x) => x.classList.toggle('on', x === b))
+})
+
+document.getElementById('cats').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-cat]')
+  if (!b) return
+  cat = b.dataset.cat
+  render()
+})
+
+document.getElementById('q').addEventListener('input', (e) => {
+  q = e.target.value
+  render()
+})
+
+pane.addEventListener('click', (e) => {
+  const b = e.target.closest('button.cell')
+  if (!b) return
+  const ch = b.dataset.ch
+  const hex = b.dataset.hex || ''
+  if (mode === 'folder') {
+    folderIcon[activeFolder] = { ch, hex }
+    renderTree()
+  } else {
+    docLines[1] = (docLines[1] || '') + ch
+    renderDoc()
+  }
+})
+
+document.getElementById('tree').addEventListener('click', (e) => {
+  const row = e.target.closest('.trow')
+  if (!row) return
+  activeFolder = row.dataset.dir
+  renderTree()
+})
+
+render(); renderDoc(); renderTree()
+</script>
+</body>
+</html>

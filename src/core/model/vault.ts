@@ -34,6 +34,11 @@ export type FileMeta = {
   starred?: boolean
   /** 显示用的别名（文件名不动） */
   alias?: string
+  /**
+   * 自定义图标：一个 emoji 字符（`.zzq` 里存 `"icon": "🚀"`）。
+   * 存字符而不是图片路径 —— 换机器、换程序都还能认，而且一行就删得掉。
+   */
+  icon?: string
   [key: string]: unknown
 }
 
@@ -117,6 +122,34 @@ export function pruneMeta(meta: VaultMeta, removed: string[]): VaultMeta {
   const files: Record<string, FileMeta> = {}
   for (const [p, v] of Object.entries(meta.files)) if (!under(p)) files[p] = v
   return { ...meta, pins: meta.pins.filter((p) => !under(p)), files }
+}
+
+/* ── 自定义图标 ──
+ * 放在 files[path].icon 里，跟着 `.zzq` 走 —— 换台机器、换个人打开都还是那个图标。
+ * 空字符串 = 没有图标（写回时把键删掉，别在文件里留一堆 `"icon": ""`）。
+ */
+
+/** 所有设过图标的路径 → 字符。树渲染用它，一次取完别每行查一遍 */
+export function iconsOf(meta: VaultMeta): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [p, v] of Object.entries(meta.files)) {
+    if (typeof v.icon === 'string' && v.icon.trim()) out[p] = v.icon.trim()
+  }
+  return out
+}
+
+/** 设置 / 清除某个路径的图标。传空字符串就是清除 */
+export function setIcon(meta: VaultMeta, path: string, icon: string): VaultMeta {
+  const cur = { ...getFileMeta(meta, path) }
+  const ch = icon.trim()
+  if (ch) cur.icon = ch
+  else delete cur.icon
+
+  const files = { ...meta.files }
+  // 清完没别的属性了就把整条删掉，保持 .zzq 干净
+  if (Object.keys(cur).length === 0) delete files[path]
+  else files[path] = cur
+  return { ...meta, files }
 }
 
 /** 保留路径：标记文件本身，或它所在的任意层级 */
