@@ -1,10 +1,11 @@
 ﻿# 用假目录句柄模拟"选文件夹"：验证 pickRepo → adopt → 进编辑器这条路径本身是否通。
 # 这只证明应用逻辑，不证明系统选择器。
+param([string]$Url = 'http://localhost:5183/')
+$url = $Url
 $ErrorActionPreference = 'Stop'
 $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $profile = Join-Path $env:TEMP ('ddfsa-' + [guid]::NewGuid().ToString('N'))
 $port = Get-Random -Minimum 9400 -Maximum 9800
-$url = 'http://localhost:5184/'
 $proc = Start-Process -FilePath $edge -PassThru -ArgumentList @(
   '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run',
   '--no-default-browser-check', "--user-data-dir=$profile", "--remote-debugging-port=$port",
@@ -123,7 +124,7 @@ $body = Eval 'document.body.innerText.slice(0, 400).replace(/\n/g, " / ")'
 Write-Host "界面: $body"
 Check '点选择文件夹后进入了编辑器' ([int](Eval 'document.querySelectorAll(".cm-editor").length') -eq 1) "cm=$(Eval 'document.querySelectorAll(".cm-editor").length')"
 Check '树里是假目录的两篇 + 子目录' ([int](Eval 'document.querySelectorAll("[data-dd-files] button").length') -ge 2) "rows=$(Eval 'document.querySelectorAll("[data-dd-files] button").length')"
-Check '篇数 = 3' ((Eval 'document.querySelector("[data-dd-files] .font-mono").textContent.trim()') -eq '3 篇') "got=$(Eval 'document.querySelector("[data-dd-files] .font-mono").textContent.trim()')"
+Check '篇数 = 2（假目录根下只有两篇）' ((Eval 'document.querySelector("[data-dd-files] .font-mono").textContent.trim()') -eq '2 篇') "got=$(Eval 'document.querySelector("[data-dd-files] .font-mono").textContent.trim()')"
 Check '没有停留在仓库选择页' ([bool](Eval '!document.body.innerText.includes("选一个文件夹当仓库")')) ''
 $stage = Eval 'window.__log.join(",")'
 Write-Host "stub log: $stage"
