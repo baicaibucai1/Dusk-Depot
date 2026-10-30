@@ -11,6 +11,7 @@ import {
   keymap,
 } from '@codemirror/view'
 import { tags as tg } from '@lezer/highlight'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import type { Block } from '../../core/markdown/parse'
 import type { Align } from '../../core/markdown/parse'
@@ -22,7 +23,7 @@ import { Math as MathView } from '../Math'
 import { resolveImage } from '../markdown/imageStore'
 import { BlockView } from '../markdown/render'
 import { useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 
 /*
  * 正文编辑器。两种形态共用一份：
@@ -104,7 +105,14 @@ const theme = EditorView.theme(
     // 块 widget 会继承正文行高（1.85），表格这类按字号算高度的元素会因此变高
     '.dd-block': { margin: '0', lineHeight: '1.5' },
     // 渲染层给块留了 my-5（阅读时好看），编辑器里太松，收一收
-    '.dd-block > div': { margin: '10px 0' },
+    /*
+     * ⚠️ 这里必须用 padding，不能用 margin。
+     *    margin 会在 `.dd-block` 盒子外面，而 CM 量 widget 高度用的是盒子本身 ——
+     *    于是"视觉上有 20px 间距、CM 认为没有"，每个块组件都让后面的行错位一点，
+     *    文档里几个表格/公式叠起来就偏出去两行：点第 47 行，光标落到第 49 行。
+     *    padding 在盒子里面，量多高就是多高，行高表才不会歪。
+     */
+    '.dd-block > div': { margin: '0', padding: '10px 0' },
     '.dd-block .katex-display': { margin: '0' },
     '.dd-fence-label': {
       display: 'inline-block',
@@ -343,9 +351,7 @@ class MathWidget extends WidgetType {
     const el = document.createElement('span')
     el.className = 'dd-math'
     el.title = '点一下编辑公式'
-    const root = createRoot(el)
-    root.render(<MathView tex={this.tex} />)
-    ;(el as DomWithRoot).__root = root
+    mountReact(el, <MathView tex={this.tex} />)
 
     el.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
@@ -370,9 +376,7 @@ class MathWidget extends WidgetType {
     return el
   }
   override destroy(el: HTMLElement) {
-    const root = (el as DomWithRoot).__root
-    if (!root) return
-    queueMicrotask(() => root.unmount())
+    unmountReact(el)
   }
 }
 
@@ -445,7 +449,40 @@ const NOTHING = Decoration.replace({ widget: new Nothing() })
  */
 export const BLOCK_CLICK = new WeakMap<EditorView, (from: number, to: number, kind: string) => void>()
 
-type DomWithRoot = HTMLElement & { __root?: Root }
+type DomWithRoot = HTMLElement & { __root?: Root; __ro?: ResizeObserver }
+
+/**
+ * 把 React 组件挂进 widget 的 DOM —— **必须同步**。
+ *
+ * CM 在 `toDOM()` 返回之后立刻量这个元素的高度，用它算"第几行在哪一段 y"。
+ * 而 React 18 的 `createRoot().render()` 是异步调度的：量的时候里面还是空的，
+ * 高度按 0 算 → 整篇文档的行高表从这一刻起就是错的 → 点这一行、光标落到别的行。
+ * 这就是"点哪都选不准"的真正原因，靠调坐标修不好。
+ *
+ * `flushSync` 让 DOM 在返回前就位；`ResizeObserver` 兜后续变化（KaTeX 的字体
+ * 是后加载的，排版完了尺寸还会再变一次），变了就请 CM 重新量。
+ */
+function mountReact(el: HTMLElement, node: ReactNode) {
+  const root = createRoot(el)
+  flushSync(() => root.render(node))
+  ;(el as DomWithRoot).__root = root
+
+  const ro = new ResizeObserver(() => {
+    EditorView.findFromDOM(el)?.requestMeasure()
+  })
+  ro.observe(el)
+  ;(el as DomWithRoot).__ro = ro
+}
+
+/** 卸载：先断开观察，再卸 React（迟一点，避开 CM 的销毁时机） */
+function unmountReact(el: HTMLElement) {
+  const node = el as DomWithRoot
+  node.__ro?.disconnect()
+  node.__ro = undefined
+  const root = node.__root
+  if (!root) return
+  queueMicrotask(() => root.unmount())
+}
 
 class BlockWidget extends WidgetType {
   private readonly key: string
@@ -466,9 +503,7 @@ class BlockWidget extends WidgetType {
   override toDOM() {
     const dom = document.createElement('div')
     dom.className = 'dd-block dd-block-' + this.block.t
-    const root = createRoot(dom)
-    root.render(<BlockView b={this.block} />)
-    ;(dom as DomWithRoot).__root = root
+    mountReact(dom, <BlockView b={this.block} />)
 
     dom.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
@@ -493,9 +528,7 @@ class BlockWidget extends WidgetType {
   }
 
   override destroy(dom: HTMLElement) {
-    const root = (dom as DomWithRoot).__root
-    if (!root) return
-    queueMicrotask(() => root.unmount())
+    unmountReact(dom)
   }
 }
 
