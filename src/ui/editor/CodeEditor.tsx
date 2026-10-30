@@ -16,11 +16,12 @@ import type { Block } from '../../core/markdown/parse'
 import type { Align } from '../../core/markdown/parse'
 import { parseMarkdown, trimUrlTail } from '../../core/markdown/parse'
 import { linkAt } from '../../core/markdown/links'
+import { mathContextAt } from '../../core/markdown/mathPanel'
 import { tableAt } from '../../core/markdown/table'
 import { Math as MathView } from '../Math'
 import { resolveImage } from '../markdown/imageStore'
 import { BlockView } from '../markdown/render'
-import { useEffect, useImperativeHandle, useRef } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Ref } from 'react'
 
 /*
@@ -301,7 +302,7 @@ class Check extends WidgetType {
       e.preventDefault()
       e.stopPropagation()
     })
-    el.addEventListener('dblclick', (e) => {
+    el.addEventListener('click', (e) => {
       e.preventDefault()
       e.stopPropagation()
       const view = EditorView.findFromDOM(el)
@@ -432,9 +433,18 @@ class BlockWidget extends WidgetType {
 
     dom.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return
-      // 这个 preventDefault 只作用在这几类块上：它们本来就是原子，
-      // 不存在"在里面拖选文字"这回事。别的块都是真文本，不受影响。
+      /*
+       * 只有**双击**才进编辑。单击必须留给"放光标 / 拖选"，
+       * 否则滚一下滚动条、点一下正文就弹出编辑器，非常烦。
+       * mousedown 的 detail 就是连击数：第二下才是 2。
+       */
+      /*
+       * preventDefault 必须无条件做：否则第一下单击就会把光标放进块里，
+       * 块随即被还原成源码 —— 第二下就再也点不到它了，双击永远等不到。
+       */
       e.preventDefault()
+      // 只有双击（第二下 detail=2）才进编辑
+      if (e.detail < 2) return
       const view = EditorView.findFromDOM(dom)
       if (!view) return
       BLOCK_CLICK.get(view)?.(this.from, this.to, this.block.t)
@@ -776,6 +786,10 @@ type Props = {
   onJump?: (target: string, kind: 'wiki' | 'path' | 'url') => void
   /** `[[` 提示要的清单：每篇带可选的小节 */
   linkTargets?: { path: string; title: string; headings: string[] }[]
+  /** 编辑辅助：hints 才浮符号条；plain 什么都不弹 */
+  assist?: 'hints' | 'plain'
+  /** 符号条上的「更多」：交给外层开公式弹窗 */
+  onMoreMath?: () => void
   /** 给外面的格式化工具条用 */
   ref?: Ref<EditorHandle>
 }
@@ -902,6 +916,20 @@ function toggleLinePrefix(view: EditorView, prefix: string) {
   view.focus()
 }
 
+/** 行内公式符号条上的常客：够用就好，剩下靠「更多」 */
+const HINT_ITEMS = [
+  { t: '\\pm', l: '±' },
+  { t: '\\times', l: '×' },
+  { t: '\\div', l: '÷' },
+  { t: '\\sqrt{$0}', l: '√' },
+  { t: '\\sum_{$0}^{}', l: '∑' },
+  { t: '\\int_{$0}^{}', l: '∫' },
+  { t: '\\approx', l: '≈' },
+  { t: '\\leq', l: '≤' },
+  { t: '\\geq', l: '≥' },
+  { t: '\\pi', l: 'π' },
+]
+
 export function CodeEditor({
   docKey,
   value,
@@ -912,6 +940,8 @@ export function CodeEditor({
   onOpenMath,
   onJump,
   linkTargets,
+  assist = 'hints',
+  onMoreMath,
   ref,
 }: Props) {
   const host = useRef<HTMLDivElement | null>(null)
@@ -923,6 +953,24 @@ export function CodeEditor({
   const jump = useRef(onJump)
   const targets = useRef(linkTargets ?? [])
   const slot = useRef(new Compartment())
+  /** 行内公式的符号条：只在 assist=hints 且光标在 $…$ 里时出现 */
+  const [hint, setHint] = useState<{ x: number; y: number } | null>(null)
+  const assistRef = useRef(assist)
+  const moreMath = useRef(onMoreMath)
+
+  /** 符号条上点一下：插进光标处（`$0` 标记插完光标的位置） */
+  function insertSnippet(snippet: string) {
+    const v = view.current
+    if (!v) return
+    const cut = snippet.indexOf('$0')
+    const text = cut < 0 ? snippet : snippet.slice(0, cut) + snippet.slice(cut + 2)
+    const pos = v.state.selection.main.head
+    v.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + (cut < 0 ? text.length : cut) },
+    })
+    v.focus()
+  }
 
 
 
@@ -978,13 +1026,40 @@ export function CodeEditor({
     onMathClick.current = onOpenMath
     jump.current = onJump
     targets.current = linkTargets ?? []
-  }, [onChange, onContext, onOpenTable, onOpenMath, onJump, linkTargets])
+    assistRef.current = assist
+    moreMath.current = onMoreMath
+  }, [onChange, onContext, onOpenTable, onOpenMath, onJump, linkTargets, assist, onMoreMath])
 
   // 只在换文件时重建
   useEffect(() => {
     const el = host.current
     if (!el) return
 
+
+    /** 光标进 `$…$` 就浮一条符号；plain 模式完全不出现 */
+    const syncHint = (v2: EditorView) => {
+      if (assistRef.current !== 'hints') {
+        setHint(null)
+        return
+      }
+      const pos = v2.state.selection.main.head
+      const ctx = mathContextAt(v2.state.doc.toString(), pos)
+      const el = host.current
+      if (!ctx || ctx.kind !== 'inline' || !el) {
+        setHint(null)
+        return
+      }
+      const c = v2.coordsAtPos(pos)
+      if (!c) {
+        setHint(null)
+        return
+      }
+      const box = el.getBoundingClientRect()
+      setHint({
+        x: Math.min(c.left - box.left, Math.max(0, box.width - 320)),
+        y: Math.max(0, c.top - box.top - 38),
+      })
+    }
 
     const v = new EditorView({
       parent: el,
@@ -1037,6 +1112,7 @@ export function CodeEditor({
             const inTable = Boolean(tableAt(st.doc.toString().split("\n"), line.number))
 
             emitCtx.current({ inTable, heading: h ? (h[1] ?? "").length : null })
+            syncHint(u.view)
           }),
         ],
       }),
@@ -1094,6 +1170,33 @@ export function CodeEditor({
   return (
     <div className="relative h-full">
       <div ref={host} className="h-full" />
+      {hint ? (
+        <div
+          data-dd-math-hint
+          className="absolute z-30 flex h-8 items-center gap-0.5 rounded-lg border border-line bg-surface px-1 shadow-[0_10px_26px_-10px_rgba(16,35,28,0.3)]"
+          style={{ left: hint.x, top: hint.y }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {HINT_ITEMS.map((it) => (
+            <button
+              key={it.t}
+              type="button"
+              title={it.t}
+              onClick={() => insertSnippet(it.t)}
+              className="grid size-7 cursor-pointer place-items-center rounded-md text-[14px] leading-none text-ink hover:bg-surface-2 active:bg-green-soft"
+            >
+              {it.l}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => moreMath.current?.()}
+            className="ml-0.5 h-7 cursor-pointer rounded-md px-2 text-[11.5px] text-green-deep hover:bg-green-soft"
+          >
+            更多
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

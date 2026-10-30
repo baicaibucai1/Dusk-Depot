@@ -65,6 +65,8 @@ type Props = {
   notes: { path: string; title: string }[]
   /** `[[` 提示要的清单：每篇带自己的小节 */
   linkTargets?: { path: string; title: string; headings: string[] }[]
+  /** 编辑辅助（来自设置）：hints 才浮符号条 */
+  assist?: 'hints' | 'plain'
   /** 当前文档是不是 `.note`（是的话用块编辑器，不用 markdown 编辑器） */
   noteDir: string | null
   /** 块编辑器把大纲/正文报给上层（右栏要用） */
@@ -96,6 +98,7 @@ export function DocPane({
   onAnchorDone,
   notes,
   linkTargets,
+  assist,
   noteDir,
   onNoteInfo,
 }: Props) {
@@ -442,6 +445,8 @@ export function DocPane({
               onContext={setCtx}
               onJump={onJump}
               linkTargets={linkTargets}
+              assist={assist}
+              onMoreMath={() => setMathDlg({ initial: '', kind: 'block', range: null })}
               onOpenMath={(from, to) => {
                 const raw = text.slice(from, to)
                 // 把 `$$ … $$` 里面那段取出来

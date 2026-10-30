@@ -913,6 +913,7 @@ export function App() {
                   onJump={jumpTo}
                   notes={Object.keys(files).map((p) => ({ path: p, title: titleOf(files, p) }))}
                   linkTargets={linkTargets}
+                  assist={settings.assist}
                   /*
                    * ⚠️ 必须按**这一栏自己的** active 算，不能用全局 current（那是焦点栏的文档）。
                    * 用全局值时：非焦点栏里的 .note 拿不到 noteDir，块编辑器不渲染；
