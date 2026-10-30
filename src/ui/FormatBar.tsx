@@ -34,6 +34,8 @@ export type FormatProps = {
   onWrap: (before: string, after: string, placeholder: string) => void
   onPrefix: (prefix: string) => void
   onInsert: (text: string) => void
+  /** 插一个块公式，光标落在两个 $$ 之间 */
+  onMathBlock: () => void
   onHeading: (level: number | null) => void
   onInsertTable: (rows: number, cols: number) => void
   onEditTable: () => void
@@ -392,7 +394,7 @@ export function FormatBar(p: FormatProps) {
         <button type="button" disabled={p.disabled} title="行内公式" aria-label="行内公式" className={BTN} onClick={() => p.onWrap('$', '$', 'E=mc^2')}>
           <IconSigma className="size-4" />
         </button>
-        <button type="button" disabled={p.disabled} title="块级公式" aria-label="块级公式" className={BTN} onClick={() => p.onInsert('\n$$\n\n$$\n')}>
+        <button type="button" disabled={p.disabled} title="块级公式（光标会停在公式里）" aria-label="块级公式" className={BTN} onClick={() => p.onMathBlock()}>
           <IconMathBlock className="size-4" />
         </button>
 

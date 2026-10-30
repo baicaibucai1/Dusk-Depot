@@ -320,6 +320,7 @@ export function DocPane({
           }
           onPrefix={(prefix) => editorRef.current?.linePrefix(prefix)}
           onInsert={(text) => editorRef.current?.insert(text)}
+          onMathBlock={() => editorRef.current?.insertMathBlock()}
           onHeading={(level) => editorRef.current?.setHeading(level)}
           onInsertTable={(rows, cols) => {
             const table = buildTable(emptyTable(Math.max(0, rows - 1), cols))

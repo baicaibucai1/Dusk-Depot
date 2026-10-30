@@ -218,3 +218,27 @@ describe('大纲不受新语法影响', () => {
     expect(out.map((b) => b.t)).toEqual(['heading', 'li', 'hr', 'heading'])
   })
 })
+
+describe('块公式的行号必须落在文档内（回归：打第二个 $ 会抛 RangeError）', () => {
+  it('没收尾的 $$ 也不能给出界行号', () => {
+    const blocks = parseMarkdown('前文\n$$')
+    const mb = blocks.find((b) => b.t === 'mathblock')
+    expect(mb).toBeTruthy()
+    if (mb) {
+      expect(mb.from).toBe(2)
+      expect(mb.to).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it('刚打出 $$ 加空行（还没写公式）也一样', () => {
+    const blocks = parseMarkdown('线\n$$\n')
+    for (const b of blocks) expect(b.to).toBeLessThanOrEqual(3)
+  })
+
+  it('正常收尾的行号不变', () => {
+    const blocks = parseMarkdown('前文\n$$\nE=mc^2\n$$\n后文')
+    const mb = blocks.find((b) => b.t === 'mathblock')
+    expect(mb?.from).toBe(2)
+    expect(mb?.to).toBe(4)
+  })
+})

@@ -656,8 +656,15 @@ function buildDecos(state: EditorState, live: boolean): DecorationSet {
   const overlaps = (from: number, to: number) => sel.from < to && sel.to > from
 
   for (const b of blocks) {
-    const fromPos = doc.line(b.from).from
-    const toPos = doc.line(b.to).to
+    /*
+     * 行号夹在文档范围内。解析器给了界外的行号时（比如没收尾的 $$），
+     * doc.line() 会抛 RangeError，而这是在事务里抛 —— 用户看到的是"这一次按键没反应"，
+     * 连报错都没有。宁可少画一个装饰，也不能让编辑器停摆。
+     */
+    const fromLine = Math.min(Math.max(1, b.from), doc.lines)
+    const toLine = Math.min(Math.max(fromLine, b.to), doc.lines)
+    const fromPos = doc.line(fromLine).from
+    const toPos = doc.line(toLine).to
     const active = (cursorLine >= b.from && cursorLine <= b.to) || overlaps(fromPos, toPos)
 
     // ① 不是"一行字"的块：换 widget；光标在里面时显示源码
@@ -748,8 +755,10 @@ type Props = {
 export type EditorHandle = {
   wrap: (before: string, after: string, placeholder: string) => void
   linePrefix: (prefix: string) => void
-  /** 原地插入一段（表格骨架、块公式这类多行东西） */
+  /** 原地插入一段（表格骨架这类多行东西） */
   insert: (text: string) => void
+  /** 插一个块公式，并把光标放进两个 $$ 之间 */
+  insertMathBlock: () => void
   /** 把当前行设成某一级标题（null = 正文） */
   setHeading: (level: number | null) => void
   /** 光标所在的那张表；不在表格里返回 null。align 按列，保存时原样写回 */
@@ -938,6 +947,15 @@ export function CodeEditor({
       insert: (text) => {
         const v = view.current
         if (v) insertText(v, text)
+      },
+      insertMathBlock: () => {
+        const v = view.current
+        if (!v) return
+        const pos = v.state.selection.main.head
+        const text = '\n$$\n\n$$\n'
+        // `\n$$\n` 正好 4 个字符 —— 光标落进中间那行，用户接着就能打公式
+        v.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + 4 } })
+        v.focus()
       },
       setHeading: (level) => {
         const v = view.current

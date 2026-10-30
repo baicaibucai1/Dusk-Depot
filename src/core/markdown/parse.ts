@@ -256,7 +256,13 @@ export function parseMarkdown(src: string): Block[] {
         }
         const tail = (lines[i] ?? '').trim()
         if (tail && tail !== '$$') body.push(tail.slice(0, -2))
-        add({ t: 'mathblock', tex: body.join('\n').trim() }, start, i + 1)
+        /*
+         * ⚠️ 没写收尾的 `$$` 时，上面那个 while 会把 i 推到 lines.length，
+         *    于是 `i + 1` 比最后一行还多 1。装饰层拿这个行号去 doc.line() 会抛
+         *    `RangeError: Invalid line number`，而且是在事务里抛 —— 用户那边表现
+         *    成"打第二个 $ 没反应"。所以这里必须夹住。
+         */
+        add({ t: 'mathblock', tex: body.join('\n').trim() }, start, Math.min(i + 1, lines.length))
         continue
       }
     }
