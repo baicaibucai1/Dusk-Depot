@@ -19,6 +19,7 @@ import { resolveImage } from './imageStore'
  * 而且 CodeMirror 里的 widget 是另一个 React root，拿不到 props 链。
  */
 export type JumpKind = 'wiki' | 'path' | 'url'
+
 export const JumpContext = createContext<((target: string, kind: JumpKind) => void) | null>(null)
 
 /**

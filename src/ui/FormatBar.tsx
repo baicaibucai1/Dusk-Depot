@@ -205,44 +205,49 @@ function LinkCard({
 function TableSizePicker({ onPick }: { onPick: (rows: number, cols: number) => void }) {
   const [hover, setHover] = useState<{ r: number; c: number } | null>(null)
   const MAX = 6
+  const CELL = 26
 
   return (
-    <div className="p-1" style={{ width: 168 }}>
-      <div className="mb-1.5 px-1 text-[11px] text-ink-3">
-        {hover ? `${hover.r} 行 × ${hover.c} 列` : '选行列数'}
+    <div className="p-2" style={{ width: 210 }}>
+      <div className="mb-2 flex items-baseline gap-2 px-0.5">
+        <span className="text-[12px] font-medium text-ink">插入表格</span>
+        <span className="ml-auto font-mono text-[11px] tabular-nums text-green-deep">
+          {hover ? hover.r + ' × ' + hover.c : '—'}
+        </span>
       </div>
+
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(6, 22px)',
-          gridAutoRows: '22px',
-          gap: 4,
-        }}
+        className="rounded-lg bg-surface-2/60 p-1.5"
         onMouseLeave={() => setHover(null)}
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(' + MAX + ', ' + CELL + 'px)', gap: 3 }}
       >
         {Array.from({ length: MAX * MAX }, (_, i) => {
           const r = Math.floor(i / MAX) + 1
           const c = (i % MAX) + 1
           const on = hover ? r <= hover.r && c <= hover.c : false
+          // 鼠标正指着的那一格再深一点，边界更好认
+          const edge = hover !== null && r === hover.r && c === hover.c
           return (
             <button
               key={i}
               type="button"
-              aria-label={`${r} 行 ${c} 列`}
+              aria-label={r + ' 行 ' + c + ' 列'}
               onMouseEnter={() => setHover({ r, c })}
               onClick={() => onPick(r, c)}
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: 6,
-                border: `1px solid ${on ? 'rgba(14,155,102,0.55)' : 'var(--color-line)'}`,
-                background: on ? 'rgba(14,155,102,0.22)' : 'var(--color-surface-2)',
-                transition: 'background 120ms, border-color 120ms',
-              }}
+              style={{ width: CELL, height: CELL }}
+              className={'cursor-pointer rounded-[6px] border transition-colors ' + (edge
+                ? 'border-green bg-green/25'
+                : on
+                  ? 'border-green/45 bg-green/15'
+                  : 'border-line bg-surface hover:border-green/35')}
             />
           )
         })}
       </div>
+
+      <p className="mt-2 px-0.5 text-[10.5px] leading-relaxed text-ink-3">
+        点一下就把表格插进去，之后点表格还能用网格改
+      </p>
     </div>
   )
 }

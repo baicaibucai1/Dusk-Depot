@@ -1150,8 +1150,23 @@ export function CodeEditor({
               },
             ]),
           ),
-          // 双击双链/链接直接跳 —— 不是"选中一段文字"，是真的过去
+          /*
+           * 编辑模式里跳转有两把钥匙：
+           *   · 双击 —— 手不用离开鼠标
+           *   · Ctrl/⌘ + 单击 —— 编辑器里的通行做法，尤其是习惯了的人
+           * 单击本身不能跳：那一步是"放光标"。
+           */
           EditorView.domEventHandlers({
+            click: (e, v2) => {
+              if (!(e.ctrlKey || e.metaKey)) return false
+              const pos = v2.posAtCoords({ x: e.clientX, y: e.clientY })
+              if (pos == null) return false
+              const hit = linkAt(v2.state.doc.toString(), pos)
+              if (!hit) return false
+              e.preventDefault()
+              jump.current?.(hit.target, hit.kind)
+              return true
+            },
             dblclick: (e, v2) => {
               const pos = v2.posAtCoords({ x: e.clientX, y: e.clientY })
               if (pos == null) return false
@@ -1238,6 +1253,7 @@ export function CodeEditor({
           y={wiki.y}
           onPick={applyWiki}
           onHover={(i) => setWiki((w) => (w ? { ...w, active: i } : w))}
+          onClose={() => setWiki(null)}
         />
       ) : null}
     </div>
