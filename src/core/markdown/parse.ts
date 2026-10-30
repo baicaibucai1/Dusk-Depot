@@ -34,7 +34,8 @@ export type Inline =
   | { t: 'wiki'; v: string }
   | { t: 'tag'; v: string }
   /** 行内数学，原样交给 KaTeX */
-  | { t: 'math'; v: string }
+  /** 数学。`display` = 来自 `$$…$$`，渲染时用展示体（居中、字号大一号） */
+  | { t: 'math'; v: string; display?: boolean }
   /** `![文字](地址)` */
   | { t: 'image'; alt: string; src: string }
   /** `[文字](地址)`，或裸 URL 自动链接（两者都是 link） */
@@ -56,8 +57,12 @@ export type BlockBody =
   | { t: 'table'; head: Inline[][]; rows: Inline[][][]; align: Align[] }
   /** 分割线 */
   | { t: 'hr' }
-  /** 块级数学（`$$…$$`），原样交给 KaTeX */
-  | { t: 'mathblock'; tex: string }
+  /**
+   * 块级数学（`$$…$$`），原样交给 KaTeX。
+   * `closed` = 找到了收尾的 `$$`。没收尾时不渲染成 widget ——
+   * 否则写了一半的公式会把后面整篇吞掉，光标一离开看起来就是"内容没了"。
+   */
+  | { t: 'mathblock'; tex: string; closed?: boolean }
 
 /** 块 + 它在原文里占的行（1 起算，首尾都含） */
 export type Block = BlockBody & { from: number; to: number }
@@ -82,7 +87,13 @@ const INLINE = new RegExp(
     /\*([^*]+)\*/.source, // 10 斜体
     /~~([^~\n]+)~~/.source, // 11 划掉
     /#([\p{L}\p{N}_/-]+)/u.source, // 12 标签
-    /\$([^\s$](?:[^$\n]*[^\s$])?)\$/.source, // 13 行内数学
+    /*
+     * 13 `$$…$$` —— 必须排在 14 前面。
+     * 否则 `$$E=mc^2$$`（同一行还有别的字时）会被拆成
+     * 「文本 $ + 行内公式 + 文本 $」，屏幕上就真的出现两个美元符号。
+     */
+    /\$\$([^$\n]+?)\$\$/.source,
+    /\$([^\s$](?:[^$\n]*[^\s$])?)\$/.source, // 14 行内数学
   ].join('|'),
   'gu',
 )
@@ -115,7 +126,7 @@ export function tokenize(text: string): Inline[] {
     const at = m.index ?? 0
     if (at > last) out.push({ t: 'text', v: text.slice(last, at) })
 
-    const [, esc, code, imgAlt, imgSrc, linkText, linkHref, wiki, url, bold, italic, strike, tag, math] = m
+    const [, esc, code, imgAlt, imgSrc, linkText, linkHref, wiki, url, bold, italic, strike, tag, showMath, math] = m
     if (esc !== undefined) out.push({ t: 'text', v: esc })
     else if (code !== undefined) out.push({ t: 'code', v: code })
     else if (imgSrc !== undefined) out.push({ t: 'image', alt: imgAlt ?? '', src: imgSrc })
@@ -131,6 +142,7 @@ export function tokenize(text: string): Inline[] {
     else if (italic !== undefined) out.push({ t: 'italic', v: italic })
     else if (strike !== undefined) out.push({ t: 'strike', v: strike })
     else if (tag !== undefined) out.push({ t: 'tag', v: tag })
+    else if (showMath !== undefined) out.push({ t: 'math', v: showMath, display: true })
     else if (math !== undefined) out.push({ t: 'math', v: math })
 
     last = at + m[0].length
@@ -256,13 +268,19 @@ export function parseMarkdown(src: string): Block[] {
         }
         const tail = (lines[i] ?? '').trim()
         if (tail && tail !== '$$') body.push(tail.slice(0, -2))
+        // 走到文件末尾还没找到收尾 = 没闭合
+        const closed = i < lines.length
         /*
          * ⚠️ 没写收尾的 `$$` 时，上面那个 while 会把 i 推到 lines.length，
          *    于是 `i + 1` 比最后一行还多 1。装饰层拿这个行号去 doc.line() 会抛
          *    `RangeError: Invalid line number`，而且是在事务里抛 —— 用户那边表现
          *    成"打第二个 $ 没反应"。所以这里必须夹住。
          */
-        add({ t: 'mathblock', tex: body.join('\n').trim() }, start, Math.min(i + 1, lines.length))
+        add(
+          { t: 'mathblock', tex: body.join('\n').trim(), closed },
+          start,
+          Math.min(i + 1, lines.length),
+        )
         continue
       }
     }

@@ -221,6 +221,11 @@ export function InlineView({ items }: { items: Inline[] }) {
             )
           }
           case 'math':
+            /*
+             * 行内就是行内 —— 包括 `公式：$$x$$` 这种夹在句子里写的。
+             * 「整段只有公式」在 BlockView 里升级成块，那才是放大的场合；
+             * 这里放大只会把行高撑坏。
+             */
             return <Math key={i} tex={it.v} />
           case 'image': {
             const url = resolveImage(it.src)
@@ -407,12 +412,32 @@ export function BlockView({ b }: { b: Block }) {
 
     case 'mathblock':
       return (
-        <div className="my-6 rounded-xl bg-surface-2/40 py-3">
-          <Math tex={b.tex} block />
+        <div className="my-5 rounded-xl bg-surface-2/40 py-3">
+          {b.tex.trim() ? (
+            <Math tex={b.tex} block />
+          ) : (
+            // 空块别给一个什么都没有的盒子，看着像坏了
+            <p className="text-center text-[12px] text-ink-3">（空公式 · 点一下开始写）</p>
+          )}
         </div>
       )
 
     default: {
+      /*
+       * 整段只有一个 `$$…$$`（前后空白不算）—— 这就是块公式，
+       * 哪怕它和前后文写在同一行里。以前这种会被拆成「$ + 行内公式 + $」，
+       * 屏幕上真出现两个美元符号。
+       */
+      const meaningful = b.inlines.filter((i) => !(i.t === 'text' && !i.v.trim()))
+      const onlyMath = meaningful.length === 1 ? meaningful[0] : null
+      if (onlyMath?.t === 'math' && onlyMath.display) {
+        return (
+          <div className="my-5 rounded-xl bg-surface-2/40 py-3">
+            <Math tex={onlyMath.v} block />
+          </div>
+        )
+      }
+
       // 一段里只有一张图 = 独立图片：居中成"图"，alt 当图注
       const onlyImage = b.inlines.length === 1 && b.inlines[0]?.t === 'image'
       if (onlyImage && b.inlines[0]?.t === 'image') {

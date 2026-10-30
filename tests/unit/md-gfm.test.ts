@@ -242,3 +242,93 @@ describe('块公式的行号必须落在文档内（回归：打第二个 $ 会�
     expect(mb?.to).toBe(4)
   })
 })
+
+describe('$$…$$ 夹在句子里也不能露出美元符号（回归：截图里的 $…$ 就是这条）', () => {
+  it('整行只有 $$…$$ 是块公式', () => {
+    const b = parseMarkdown('$$E = mc^2$$')[0]
+    expect(b?.t).toBe('mathblock')
+  })
+
+  it('句子中间的 $$…$$ 是"展示型行内公式"，不是「$ + 公式 + $」', () => {
+    const blocks = parseMarkdown('公式：$$E = mc^2$$ 就这样')
+    const para = blocks[0]
+    if (para?.t !== 'para') throw new Error('不是段落')
+    const texts = para.inlines.filter((i) => i.t === 'text').map((i) => i.v).join('')
+    expect(texts).not.toContain('$')
+    const math = para.inlines.find((i) => i.t === 'math')
+    expect(math).toBeTruthy()
+    if (math?.t === 'math') {
+      expect(math.v).toBe('E = mc^2')
+      expect(math.display).toBe(true)
+    }
+  })
+
+  it('$$…$$ 后面跟文字也一样', () => {
+    const para = parseMarkdown('$$E=mc^2$$ 后文')[0]
+    if (para?.t !== 'para') throw new Error('不是段落')
+    expect(para.inlines.filter((i) => i.t === 'text').map((i) => i.v).join('')).not.toContain('$')
+  })
+
+  it('单个 $…$ 不受影响，仍是普通行内公式', () => {
+    const para = parseMarkdown('行内 $x^2$ 结束')[0]
+    if (para?.t !== 'para') throw new Error('不是段落')
+    const math = para.inlines.find((i) => i.t === 'math')
+    if (math?.t === 'math') expect(math.display).toBeUndefined()
+  })
+
+  it('$$…$$ 中间有换行就不当块（行内公式本来不跨行）', () => {
+    const para = parseMarkdown('前 $$a\nb$$ 后')[0]
+    if (para?.t !== 'para') throw new Error('不是段落')
+    expect(para.inlines.some((i) => i.t === 'math')).toBe(false)
+  })
+
+  it('空公式 $$  $$ 不崩，也不吞掉后面的字', () => {
+    const blocks = parseMarkdown('$$\n\n$$\n后文')
+    expect(blocks.some((b) => b.t === 'mathblock')).toBe(true)
+    expect(blocks.some((b) => b.t === 'para')).toBe(true)
+  })
+})
+
+describe('没闭合的块公式标记为 closed:false（编辑器据此不渲染 widget）', () => {
+  it('有收尾 → closed true', () => {
+    const b = parseMarkdown('$$\nE=mc^2\n$$')[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(true)
+  })
+
+  it('没写收尾 → closed false，且一路吃到末尾', () => {
+    const blocks = parseMarkdown('$$\nE=mc^2\n后面还有字')
+    const b = blocks[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(false)
+    expect(b.to).toBe(3)
+  })
+
+  it('只打了 $$ 和空行也算没闭合', () => {
+    const b = parseMarkdown('$$\n')[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(false)
+  })
+})
+
+describe('没闭合的块公式标记为 closed:false（编辑器据此不渲染 widget）', () => {
+  it('有收尾 → closed true', () => {
+    const b = parseMarkdown('$$\nE=mc^2\n$$')[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(true)
+  })
+
+  it('没写收尾 → closed false，且一路吃到末尾', () => {
+    const blocks = parseMarkdown('$$\nE=mc^2\n后面还有字')
+    const b = blocks[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(false)
+    expect(b.to).toBe(3)
+  })
+
+  it('只打了 $$ 和空行也算没闭合', () => {
+    const b = parseMarkdown('$$\n')[0]
+    if (b?.t !== 'mathblock') throw new Error('不是块公式')
+    expect(b.closed).toBe(false)
+  })
+})

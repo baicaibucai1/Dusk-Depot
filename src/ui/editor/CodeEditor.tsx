@@ -107,6 +107,9 @@ const theme = EditorView.theme(
     '.dd-strike': { textDecoration: 'line-through', color: 'var(--color-ink-3)' },
     // 块 widget 会继承正文行高（1.85），表格这类按字号算高度的元素会因此变高
     '.dd-block': { margin: '0', lineHeight: '1.5' },
+    // 渲染层给块留了 my-5（阅读时好看），编辑器里太松，收一收
+    '.dd-block > div': { margin: '10px 0' },
+    '.dd-block .katex-display': { margin: '0' },
     '.dd-fence-label': {
       display: 'inline-block',
       fontFamily: 'var(--font-mono)',
@@ -580,6 +583,25 @@ function decorateLine(
     out.push(mark('dd-link').range(line.from + at, line.from + end))
   }
 
+  /*
+   * $$…$$ 必须比单个 $ 先认领。
+   * 否则 `公式：$$\int_a^b f(x)dx$$` 会被单个 $ 的正则从第二个 $ 开始匹配，
+   * 屏幕上就真的出现两个美元符号（这个坑用户截图指出过）。
+   */
+  for (const m of text.matchAll(/\$\$([^$\n]+?)\$\$/g)) {
+    const at = m.index ?? 0
+    const end = at + m[0].length
+    if (claimed.some((c) => at < c.to && c.from < end)) continue
+    claimed.push({ from: at, to: end })
+    const absFrom = line.from + at
+    const absTo = line.from + end
+    out.push(
+      inElement(absFrom, absTo)
+        ? mark('dd-math-raw').range(absFrom, absTo)
+        : Decoration.replace({ widget: new MathWidget(m[1] ?? "") }).range(absFrom, absTo),
+    )
+  }
+
   // $行内公式$：光标不在里面就渲染成公式，在里面就露源码
   // 守卫和解析器一致：$ 前后不能贴空白，否则"省 $5 到 $10"会被当成公式
   for (const m of text.matchAll(/\$([^\s$](?:[^$\n]*[^\s$])?)\$/g)) {
@@ -669,6 +691,16 @@ function buildDecos(state: EditorState, live: boolean): DecorationSet {
 
     // ① 不是"一行字"的块：换 widget；光标在里面时显示源码
     //   表格 / 公式 / 分割线 —— 分割行也换，否则 `---` 会傻傻地以原文样子杵在正文里
+    /*
+     * 没闭合的块公式：只露源码，不换 widget。
+     * 它此时会一路吃到文档末尾，换成 widget 等于把后面整篇藏起来 ——
+     * 写一半的公式本来就是"半成品"，让它老实显示比装作渲染好。
+     */
+    if (b.t === 'mathblock' && b.closed === false) {
+      for (let n = b.from; n <= b.to; n++) decorateLine(out, doc, n, head)
+      continue
+    }
+
     if (b.t === 'table' || b.t === 'mathblock' || b.t === 'hr') {
       if (!active) {
         out.push(
