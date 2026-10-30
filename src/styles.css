@@ -67,6 +67,13 @@
     height: 10px;
   }
 
+  /* 原生滚动条两端的小箭头：自定义了轨道就把它们关掉，不然像页面上多了个符号 */
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
   *::-webkit-scrollbar-thumb {
     background: rgba(139, 154, 147, 0.4);
     border: 3px solid transparent;

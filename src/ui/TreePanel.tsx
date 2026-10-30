@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { TreeNode } from '../core/model/library'
 import { labelOf } from '../core/model/path'
 import { TreeIcon } from './fileIcon'
-import { Files as FilesIcon } from 'lucide-react'
 import type { FileMap } from '../core/model/library'
 import type { ReactNode } from 'react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -10,11 +9,11 @@ import {
   IconChevron,
   IconFolderPlus,
   IconMore,
+  IconPanelLeft,
   IconPin,
   IconPlus,
-  IconSliders,
 } from './icons'
-import { ToolTabIcon, ToolsPanel } from './ToolsPanel'
+import { ToolsPanel } from './ToolsPanel'
 
 type Props = {
   tree: TreeNode[]
@@ -64,8 +63,10 @@ type Props = {
   files: FileMap
   /** `.note` 目录数（还没退役，先计入篇数） */
   noteDocs: number
-  /** 打开设置面板 */
-  onSettings: () => void
+  /** 显示哪一栏：由最左侧导航条决定，这一栏自己不再有页签 */
+  section: 'files' | 'tools'
+  /** 收起这一栏（导航条还在，点它就回来） */
+  onCollapse: () => void
 
   /** 宽度由 App 管（可拖动） */
   width: number
@@ -79,9 +80,6 @@ const SAVE_LABEL = {
   saving: '写入中…',
   error: '写盘失败',
 } as const
-
-/** 左栏顶部的两个页签：文件 / 工具 */
-type SideTab = 'files' | 'tools'
 
 const HEAD_BTN =
   'grid size-6 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2'
@@ -118,11 +116,11 @@ export function TreePanel({
   onPickVault,
   files,
   noteDocs,
-  onSettings,
+  section,
+  onCollapse,
   width,
   resizer,
 }: Props) {
-  const [tab, setTab] = useState<SideTab>('files')
   const [menu, setMenu] = useState<MenuState>(null)
   const [rename, setRename] = useState<RenameState>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -347,38 +345,24 @@ export function TreePanel({
       style={{ width }}
       className="relative flex shrink-0 flex-col border-r border-line bg-surface"
     >
-      {/* 顶部：VS 式两个页签。只做这两档，后面再加 */}
-      <div className="flex h-[38px] shrink-0 items-stretch gap-0.5 border-b border-line px-1" role="tablist" aria-label="左侧功能">
-        {(
-          [
-            { id: 'files', label: '文件', Icon: FilesIcon },
-            { id: 'tools', label: '工具', Icon: ToolTabIcon },
-          ] as const
-        ).map(({ id, label, Icon }) => {
-          const on = tab === id
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              onClick={() => setTab(id)}
-              className={[
-                'relative flex items-center gap-1.5 px-3 text-[12.5px] transition-colors',
-                on ? 'font-medium text-ink' : 'text-ink-3 hover:text-ink-2',
-              ].join(' ')}
-            >
-              <Icon className="size-3.5" />
-              {label}
-              {on ? (
-                <span aria-hidden className="absolute inset-x-2 -bottom-px h-0.5 rounded-t bg-green" />
-              ) : null}
-            </button>
-          )
-        })}
+      {/* 顶部：这一栏叫什么 + 收起。切栏由最左侧的导航条管，这里不再放页签 */}
+      <div className="flex h-[38px] shrink-0 items-center gap-1 border-b border-line pr-1 pl-3">
+        <span className="text-[12px] font-medium tracking-wide text-ink-2">
+          {section === 'files' ? '文件' : '工具'}
+        </span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onCollapse}
+          title="收起这一栏"
+          aria-label="收起文件栏"
+          className="grid size-7 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+        >
+          <IconPanelLeft className="size-4" />
+        </button>
       </div>
 
-      {tab === 'files' ? (
+      {section === 'files' ? (
         <div data-dd-files className="flex min-h-0 flex-1 flex-col">
           {/* 篇数 + 新建。仓库名仍在底部，点它切仓库 */}
           <div className="flex h-[34px] shrink-0 items-center gap-1 border-b border-line pr-2 pl-3">
@@ -463,17 +447,6 @@ export function TreePanel({
         >
           {SAVE_LABEL[save]}
         </span>
-
-        {/* 设置从原来的图标轨搬到这里 */}
-        <button
-          type="button"
-          onClick={onSettings}
-          title="设置"
-          aria-label="设置"
-          className="grid size-6 shrink-0 place-items-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
-        >
-          <IconSliders className="size-4" />
-        </button>
 
         {vaultMenu ? (
           <>

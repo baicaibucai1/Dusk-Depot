@@ -12,6 +12,8 @@ type Props = {
   noteOutline?: { level: number; text: string }[]
   onClose: () => void
   onOpen: (path: string) => void
+  /** 展开还是收起。收起时宽度收到 0，中央区平滑获得空间（不覆盖内容） */
+  open: boolean
   /** 宽度由 App 管（可拖动） */
   width: number
   /** 拖拽把手，由 App 传进来贴在这一栏的左边缘 */
@@ -26,7 +28,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 /** 右侧边栏：这一栏是"关于这篇的旁注"，不是另一套功能入口 */
-export function Aside({ files, path, noteOutline, onClose, onOpen, width, resizer }: Props) {
+export function Aside({ files, path, noteOutline, onClose, onOpen, open, width, resizer }: Props) {
   const [tab, setTab] = useState<Tab>('outline')
 
   const text = files[path] ?? ''
@@ -38,9 +40,15 @@ export function Aside({ files, path, noteOutline, onClose, onOpen, width, resize
   return (
     <aside
       aria-label="大纲与关系"
-      style={{ width }}
-      className="relative flex shrink-0 flex-col border-l border-line bg-surface"
+      aria-hidden={!open}
+      style={{ width: open ? width : 0 }}
+      className={[
+        'relative flex shrink-0 overflow-hidden bg-surface transition-[width] duration-200 ease-out',
+        open ? 'border-l border-line' : 'pointer-events-none',
+      ].join(' ')}
     >
+      {/* 内层保持固定宽度：收放时内容不跟着重排，展开后就是原来的样子 */}
+      <div style={{ width }} className="flex min-h-0 flex-1 flex-col">
       <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-line px-2">
         {TABS.map((t) => (
           <button
@@ -186,7 +194,8 @@ export function Aside({ files, path, noteOutline, onClose, onOpen, width, resize
           </div>
         )}
       </div>
-      {resizer}
+      </div>
+      {open ? resizer : null}
     </aside>
   )
 }

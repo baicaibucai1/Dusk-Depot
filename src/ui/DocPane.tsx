@@ -268,7 +268,11 @@ export function DocPane({
                     type="button"
                     onClick={() => onCloseTab(p)}
                     aria-label={`关闭 ${nameOf(p)}`}
-                    className="-mr-1 grid size-4 place-items-center rounded text-ink-3/70 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface-2 hover:text-ink-2"
+                    className={[
+                      '-mr-1 grid size-4 place-items-center rounded text-ink-3/70 transition-opacity hover:bg-surface-2 hover:text-ink-2',
+                      // 活动标签上一直露着（不然关不掉），其余悬停才出现
+                      on ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover:opacity-100',
+                    ].join(' ')}
                   >
                     <span className="text-[13px] leading-none">×</span>
                   </button>

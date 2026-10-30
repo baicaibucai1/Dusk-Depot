@@ -48,6 +48,7 @@ import { SymbolPanel } from './ui/SymbolPanel'
 import { RepoGate } from './ui/RepoGate'
 import { PaneDivider } from './ui/PaneDivider'
 import { Resizer } from './ui/Resizer'
+import { Rail, type Section } from './ui/Rail'
 import { TreePanel } from './ui/TreePanel'
 import { SEED } from './ui/demo'
 
@@ -203,6 +204,10 @@ export function App() {
   const [rightW, setRightW] = useState(() => readWidths().R)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [asideOpen, setAsideOpen] = useState(true)
+  /** 最左导航条选中哪一栏（文件 / 工具） */
+  const [section, setSection] = useState<Section>('files')
+  /** 目录栏是否展开（收起后导航条还在，点一下回来） */
+  const [treeOpen, setTreeOpen] = useState(true)
 
   /** 渲染个性化：字号/行距/段距/宽度/字体。存本地，应用时写成根节点的 CSS 变量 */
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
@@ -478,6 +483,42 @@ export function App() {
     }, 250)
     return () => window.clearTimeout(t)
   }, [leftW, rightW])
+
+  /**
+   * 窄窗口：先收右栏，再收目录栏；宽回来再放开。
+   *
+   * 只在**跨过档位**时动手 —— 不然用户自己收起右栏之后，
+   * 随便拖一下窗口就又被"自动恢复"回来，控制权会打架。
+   */
+  useEffect(() => {
+    const bucketOf = (w: number) => (w < 940 ? 0 : w < 1220 ? 1 : 2)
+    let last = bucketOf(window.innerWidth)
+
+    const apply = (b: number) => {
+      if (b === 2) {
+        setAsideOpen(true)
+        setTreeOpen(true)
+      } else if (b === 1) {
+        setAsideOpen(false)
+        setTreeOpen(true)
+      } else {
+        setAsideOpen(false)
+        setTreeOpen(false)
+      }
+    }
+
+    const onResize = () => {
+      const b = bucketOf(window.innerWidth)
+      if (b === last) return
+      last = b
+      apply(b)
+    }
+
+    // 首屏也按当前宽度收一次，免得一进来就横向溢出
+    apply(last)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   /**
    * 在某一栏里打开一篇。
@@ -838,6 +879,15 @@ export function App() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-paper text-ink">
       <div className="flex min-h-0 flex-1">
+        <Rail
+          section={section}
+          onSection={setSection}
+          treeOpen={treeOpen}
+          onToggleTree={() => setTreeOpen((v) => !v)}
+          onSettings={() => setSettingsOpen(true)}
+        />
+
+        {treeOpen ? (
         <TreePanel
             tree={tree}
             current={current}
@@ -869,7 +919,8 @@ export function App() {
             onPickVault={() => void chooseFolder()}
             files={files}
             noteDocs={noteDocs.length}
-            onSettings={() => setSettingsOpen(true)}
+            section={section}
+            onCollapse={() => setTreeOpen(false)}
             width={leftW}
             resizer={
               <Resizer
@@ -882,6 +933,7 @@ export function App() {
               />
             }
           />
+        ) : null}
 
         <div ref={paneBox} className="flex min-h-0 min-w-0 flex-1">
           {panes.map((pane, i) => (
@@ -951,8 +1003,9 @@ export function App() {
         `.note` 也有右栏：大纲来自块编辑器上报的块标题，
         反链/悬空链接用"md 文件 + 各 .note 正文"的合并表算。
       */}
-      {asideOpen && lastDoc ? (
+      {lastDoc ? (
           <Aside
+            open={asideOpen}
             files={asideFiles}
             path={lastDoc}
             noteOutline={noteDocs.includes(lastDoc) ? noteInfo[lastDoc]?.outline : undefined}
@@ -962,6 +1015,7 @@ export function App() {
             resizer={
               <Resizer
                 side="right"
+                flush
                 width={rightW}
                 min={SIDEBAR_MIN}
                 max={SIDEBAR_MAX}
