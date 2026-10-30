@@ -13,7 +13,6 @@ import {
   IconPin,
   IconPlus,
 } from './icons'
-import { ToolsPanel } from './ToolsPanel'
 
 type Props = {
   tree: TreeNode[]
@@ -63,8 +62,6 @@ type Props = {
   files: FileMap
   /** `.note` 目录数（还没退役，先计入篇数） */
   noteDocs: number
-  /** 显示哪一栏：由最左侧导航条决定，这一栏自己不再有页签 */
-  section: 'files' | 'tools'
   /** 收起这一栏（导航条还在，点它就回来） */
   onCollapse: () => void
 
@@ -116,7 +113,6 @@ export function TreePanel({
   onPickVault,
   files,
   noteDocs,
-  section,
   onCollapse,
   width,
   resizer,
@@ -345,11 +341,9 @@ export function TreePanel({
       style={{ width }}
       className="relative flex shrink-0 flex-col border-r border-line bg-surface"
     >
-      {/* 顶部：这一栏叫什么 + 收起。切栏由最左侧的导航条管，这里不再放页签 */}
+      {/* 顶部：栏名 + 收起。工具页已去掉，这里只剩文件一栏 */}
       <div className="flex h-[38px] shrink-0 items-center gap-1 border-b border-line pr-1 pl-3">
-        <span className="text-[12px] font-medium tracking-wide text-ink-2">
-          {section === 'files' ? '文件' : '工具'}
-        </span>
+        <span className="text-[12px] font-medium tracking-wide text-ink-2">文件</span>
         <span className="flex-1" />
         <button
           type="button"
@@ -362,8 +356,7 @@ export function TreePanel({
         </button>
       </div>
 
-      {section === 'files' ? (
-        <div data-dd-files className="flex min-h-0 flex-1 flex-col">
+      <div data-dd-files className="flex min-h-0 flex-1 flex-col">
           {/* 篇数 + 新建。仓库名仍在底部，点它切仓库 */}
           <div className="flex h-[34px] shrink-0 items-center gap-1 border-b border-line pr-2 pl-3">
             <span className="font-mono text-[11px] text-ink-3">
@@ -421,10 +414,7 @@ export function TreePanel({
               render(tree, 0)
             )}
           </div>
-        </div>
-      ) : (
-        <ToolsPanel files={files} noteDocs={noteDocs} />
-      )}
+      </div>
 
       <footer className="relative flex h-9 shrink-0 items-center gap-2 border-t border-line px-2 text-[11px] text-ink-3">
         <button

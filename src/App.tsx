@@ -48,7 +48,7 @@ import { SymbolPanel } from './ui/SymbolPanel'
 import { RepoGate } from './ui/RepoGate'
 import { PaneDivider } from './ui/PaneDivider'
 import { Resizer } from './ui/Resizer'
-import { Rail, type Section } from './ui/Rail'
+import { Rail } from './ui/Rail'
 import { TreePanel } from './ui/TreePanel'
 import { SEED } from './ui/demo'
 
@@ -204,8 +204,6 @@ export function App() {
   const [rightW, setRightW] = useState(() => readWidths().R)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [asideOpen, setAsideOpen] = useState(true)
-  /** 最左导航条选中哪一栏（文件 / 工具） */
-  const [section, setSection] = useState<Section>('files')
   /** 目录栏是否展开（收起后导航条还在，点一下回来） */
   const [treeOpen, setTreeOpen] = useState(true)
 
@@ -880,8 +878,6 @@ export function App() {
     <div className="flex h-dvh flex-col overflow-hidden bg-paper text-ink">
       <div className="flex min-h-0 flex-1">
         <Rail
-          section={section}
-          onSection={setSection}
           treeOpen={treeOpen}
           onToggleTree={() => setTreeOpen((v) => !v)}
           onSettings={() => setSettingsOpen(true)}
@@ -919,7 +915,6 @@ export function App() {
             onPickVault={() => void chooseFolder()}
             files={files}
             noteDocs={noteDocs.length}
-            section={section}
             onCollapse={() => setTreeOpen(false)}
             width={leftW}
             resizer={

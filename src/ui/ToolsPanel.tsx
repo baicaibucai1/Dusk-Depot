@@ -1,3 +1,9 @@
+/*
+ * ⚠️ 这个面板**当前未挂到界面上**（2026-10-30 按用户要求把「工具」入口去掉了）。
+ *    代码留在库里而不是删掉，是因为「坏链报告」是真算的，接索引后还要用；
+ *    重新启用时只需要在 Rail 里加回一个入口，并把 TreePanel 的那段分支还原。
+ */
+
 import { useMemo } from 'react'
 import type { FileMap } from '../core/model/library'
 import { outgoingRefs, resolvePath, resolveWiki } from '../core/markdown/links'

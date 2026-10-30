@@ -91,7 +91,7 @@ Start-Sleep -Milliseconds 2200
 
 Write-Host 'A. 四区结构'
 Check '左侧导航条宽 48' ((W 'nav[aria-label="功能导航"]') -eq 48) "w=$(W 'nav[aria-label=\"功能导航\"]')"
-Check '导航条 3 个入口（文件/工具/设置）' ([int](Eval 'document.querySelectorAll("nav[aria-label=\"功能导航\"] button").length') -eq 3) "n=$(Eval 'document.querySelectorAll("nav[aria-label=\"功能导航\"] button").length')"
+Check '导航条 2 个入口（文件/设置），工具页已去掉' ((Eval '[...document.querySelectorAll("nav[aria-label=\"功能导航\"] button")].map((b) => b.getAttribute("aria-label")).join("/")') -eq '文件/设置') "got=$(Eval '[...document.querySelectorAll("nav[aria-label=\"功能导航\"] button")].map((b) => b.getAttribute("aria-label")).join("/")')"
 Check '默认选中「文件」' ((Eval 'document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]").getAttribute("aria-label")') -eq '文件') "got=$(Eval 'document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]") ? document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]").getAttribute("aria-label") : "none"')"
 $treeW = W 'section[aria-label="文件与工具"]'
 Check '目录栏在 240–320 之间' ($treeW -ge 240 -and $treeW -le 320) "w=$treeW"
