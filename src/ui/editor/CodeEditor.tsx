@@ -12,14 +12,20 @@ import {
 } from '@codemirror/view'
 import { tags as tg } from '@lezer/highlight'
 import { createRoot, type Root } from 'react-dom/client'
+import { Prec } from '@codemirror/state'
 import type { Block } from '../../core/markdown/parse'
 import type { Align } from '../../core/markdown/parse'
 import { parseMarkdown, trimUrlTail } from '../../core/markdown/parse'
+import { type WikiItem, wikiOptions, wikiQueryAt } from '../../core/markdown/linkComplete'
+import { linkAt } from '../../core/markdown/links'
+import { mathContextAt, placeCaret } from '../../core/markdown/mathPanel'
 import { tableAt } from '../../core/markdown/table'
 import { Math as MathView } from '../Math'
+import { MathPanel } from '../MathPanel'
+import { WikiPicker } from '../WikiPicker'
 import { resolveImage } from '../markdown/imageStore'
 import { BlockView } from '../markdown/render'
-import { useEffect, useImperativeHandle, useRef } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Ref } from 'react'
 
 /*
@@ -112,10 +118,16 @@ const theme = EditorView.theme(
     },
     '.dd-nothing': { display: 'none' },
     '.dd-math-raw': { color: 'var(--color-green)' },
+    /*
+     * 链接做成胶囊，不是换个颜色。
+     * 用 inset 阴影画描边而不是 border —— border 会改变行高，整段文字会抖。
+     */
     '.dd-link': {
-      color: 'var(--color-green)',
-      textDecoration: 'underline',
-      textUnderlineOffset: '2px',
+      color: 'var(--color-green-deep)',
+      background: 'var(--color-green-soft)',
+      borderRadius: '999px',
+      padding: '1px 6px',
+      boxShadow: 'inset 0 0 0 1px rgba(14,155,102,0.22)',
     },
     '.dd-img': {
       maxHeight: '28rem',
@@ -155,7 +167,13 @@ const theme = EditorView.theme(
       borderRadius: '3px',
       padding: '1px 3px',
     },
-    '.dd-wiki': { color: 'var(--color-green)', textDecoration: 'underline' },
+    '.dd-wiki': {
+      color: 'var(--color-green-deep)',
+      background: 'var(--color-green-soft)',
+      borderRadius: '999px',
+      padding: '1px 6px',
+      boxShadow: 'inset 0 0 0 1px rgba(14,155,102,0.22)',
+    },
     '.dd-tag': {
       color: 'var(--color-green)',
       background: 'var(--color-green-soft)',
@@ -718,6 +736,10 @@ type Props = {
   onContext: (ctx: EditorContext) => void
   /** 点了渲染出来的表格（用网格编辑器打开） */
   onOpenTable: (from: number, to: number) => void
+  /** 双击双链 / 链接时跳过去 */
+  onJump?: (target: string, kind: 'wiki' | 'path' | 'url') => void
+  /** `[[` 提示要的清单：每篇带可选的小节 */
+  linkTargets?: { path: string; title: string; headings: string[] }[]
   /** 给外面的格式化工具条用 */
   ref?: Ref<EditorHandle>
 }
@@ -844,13 +866,62 @@ function toggleLinePrefix(view: EditorView, prefix: string) {
   view.focus()
 }
 
-export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTable, ref }: Props) {
+export function CodeEditor({
+  docKey,
+  value,
+  live,
+  onChange,
+  onContext,
+  onOpenTable,
+  onJump,
+  linkTargets,
+  ref,
+}: Props) {
   const host = useRef<HTMLDivElement | null>(null)
   const view = useRef<EditorView | null>(null)
   const emit = useRef(onChange)
   const emitCtx = useRef(onContext)
   const onTableClick = useRef(onOpenTable)
+  const jump = useRef(onJump)
+  const targets = useRef(linkTargets ?? [])
   const slot = useRef(new Compartment())
+  /** 光标在公式里时，快速面板的锚点（相对编辑器容器） */
+  const [math, setMath] = useState<{ kind: 'inline' | 'block'; x: number; y: number } | null>(null)
+  /** 正在输 `[[`：候选、高亮项、锚点 */
+  const [wiki, setWiki] = useState<{
+    from: number
+    items: WikiItem[]
+    active: number
+    x: number
+    y: number
+  } | null>(null)
+  /** 键盘处理要读到最新的 wiki，不能靠闭包里那份 */
+  const wikiRef = useRef<typeof wiki>(null)
+  wikiRef.current = wiki
+
+  /** 选了一条候选：把 `[[已输入` 整段换成 `[[路径]]` */
+  function applyWiki(item: WikiItem) {
+    const v = view.current
+    const w = wikiRef.current
+    if (!v || !w) return
+    const head = v.state.selection.main.head
+    v.dispatch({
+      changes: { from: w.from, to: head, insert: item.insert },
+      selection: { anchor: w.from + item.insert.length },
+    })
+    setWiki(null)
+    v.focus()
+  }
+
+  /** 插一段 LaTeX：`$0` 是插件带来的光标位，插完把光标放到那儿 */
+  function insertMath(tex: string) {
+    const v = view.current
+    if (!v) return
+    const { text, caret } = placeCaret(tex)
+    const pos = v.state.selection.main.head
+    v.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + caret } })
+    v.focus()
+  }
 
 
   useImperativeHandle(
@@ -902,12 +973,75 @@ export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTab
     emit.current = onChange
     emitCtx.current = onContext
     onTableClick.current = onOpenTable
-  }, [onChange, onContext])
+    jump.current = onJump
+    targets.current = linkTargets ?? []
+  }, [onChange, onContext, onOpenTable, onJump, linkTargets])
 
   // 只在换文件时重建
   useEffect(() => {
     const el = host.current
     if (!el) return
+
+    /*
+     * 公式面板的锚点：只有在光标真的落在 `$…$` / `$$…$$` 里才冒出来。
+     * 位置按编辑器容器的坐标算，跟着光标走；下方放不下就翻到上面。
+     */
+    const PANEL_H = 252
+    const syncMath = (v: EditorView) => {
+      const pos = v.state.selection.main.head
+      const ctx = mathContextAt(v.state.doc.toString(), pos)
+      const el = host.current
+      if (!ctx || !el) {
+        setMath(null)
+        return
+      }
+      const c = v.coordsAtPos(pos)
+      if (!c) {
+        setMath(null)
+        return
+      }
+      const box = el.getBoundingClientRect()
+      const below = c.bottom - box.top + 6
+      const flip = below + PANEL_H > box.height && c.top - box.top - PANEL_H > 0
+      setMath({
+        kind: ctx.kind,
+        x: Math.min(c.left - box.left, Math.max(0, box.width - 308)),
+        y: flip ? c.top - box.top - PANEL_H - 6 : below,
+      })
+    }
+
+    /** `[[` 提示：光标前是没收尾的 `[[` 就把候选摆出来，贴着光标 */
+    const syncWiki = (v: EditorView) => {
+      const pos = v.state.selection.main.head
+      const q = wikiQueryAt(v.state.doc.toString(), pos)
+      const el = host.current
+      if (!q || !el) {
+        setWiki(null)
+        return
+      }
+      const items = wikiOptions(targets.current, q.typed)
+      if (items.length === 0) {
+        setWiki(null)
+        return
+      }
+      const c = v.coordsAtPos(pos)
+      if (!c) {
+        setWiki(null)
+        return
+      }
+      const box = el.getBoundingClientRect()
+      const H = 232
+      const below = c.bottom - box.top + 4
+      const flip = below + H > box.height && c.top - box.top - H > 0
+      setWiki((prev) => ({
+        from: q.from,
+        items,
+        // 同一段输入里保留高亮位置；换了位置就回到第一条
+        active: prev && prev.from === q.from ? Math.min(prev.active, items.length - 1) : 0,
+        x: Math.min(c.left - box.left, Math.max(0, box.width - 276)),
+        y: flip ? c.top - box.top - H - 4 : below,
+      }))
+    }
 
     const v = new EditorView({
       parent: el,
@@ -922,6 +1056,62 @@ export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTab
           slot.current.of(decos(live)),
           theme,
           keymap.of([...defaultKeymap, ...historyKeymap]),
+          /*
+           * `[[` 提示的键盘接管。必须是最高优先级：
+           * 上下键/回车/ Esc 在编辑器里本来有别的含义，浮层开着时得先归它。
+           */
+          Prec.highest(
+            keymap.of([
+              {
+                key: 'ArrowDown',
+                run: () => {
+                  const w = wikiRef.current
+                  if (!w) return false
+                  setWiki({ ...w, active: (w.active + 1) % w.items.length })
+                  return true
+                },
+              },
+              {
+                key: 'ArrowUp',
+                run: () => {
+                  const w = wikiRef.current
+                  if (!w) return false
+                  setWiki({ ...w, active: (w.active - 1 + w.items.length) % w.items.length })
+                  return true
+                },
+              },
+              {
+                key: 'Enter',
+                run: () => {
+                  const w = wikiRef.current
+                  if (!w) return false
+                  const item = w.items[w.active]
+                  if (item) applyWiki(item)
+                  return true
+                },
+              },
+              {
+                key: 'Escape',
+                run: () => {
+                  if (!wikiRef.current) return false
+                  setWiki(null)
+                  return true
+                },
+              },
+            ]),
+          ),
+          // 双击双链/链接直接跳 —— 不是"选中一段文字"，是真的过去
+          EditorView.domEventHandlers({
+            dblclick: (e, v2) => {
+              const pos = v2.posAtCoords({ x: e.clientX, y: e.clientY })
+              if (pos == null) return false
+              const hit = linkAt(v2.state.doc.toString(), pos)
+              if (!hit) return false
+              e.preventDefault()
+              jump.current?.(hit.target, hit.kind)
+              return true
+            },
+          }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) emit.current(u.state.doc.toString())
             if (!(u.docChanged || u.selectionSet || u.focusChanged)) return
@@ -933,6 +1123,8 @@ export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTab
             const inTable = Boolean(tableAt(st.doc.toString().split("\n"), line.number))
 
             emitCtx.current({ inTable, heading: h ? (h[1] ?? "").length : null })
+            syncMath(u.view)
+            syncWiki(u.view)
           }),
         ],
       }),
@@ -952,12 +1144,14 @@ export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTab
 
     // DEV-only：把编辑器实例挂出去，验收脚本才能"把光标放到某处"再断言渲染结果
     if (import.meta.env.DEV) {
-      ;(window as unknown as Record<string, unknown>).__dd_view = v
+      const w = window as unknown as Record<string, unknown>
+      w.__dd_view = v
     }
 
     return () => {
       if (import.meta.env.DEV) {
-        ;(window as unknown as Record<string, unknown>).__dd_view = null
+        const w = window as unknown as Record<string, unknown>
+        w.__dd_view = null
       }
       v.destroy()
       view.current = null
@@ -980,5 +1174,22 @@ export function CodeEditor({ docKey, value, live, onChange, onContext, onOpenTab
     v.dispatch({ changes: { from: 0, to: now.length, insert: value } })
   }, [value])
 
-  return <div ref={host} className="h-full" />
+  return (
+    <div className="relative h-full">
+      <div ref={host} className="h-full" />
+      {math ? (
+        <MathPanel kind={math.kind} x={math.x} y={math.y} onClose={() => setMath(null)} onPick={insertMath} />
+      ) : null}
+      {wiki ? (
+        <WikiPicker
+          items={wiki.items}
+          active={wiki.active}
+          x={wiki.x}
+          y={wiki.y}
+          onPick={applyWiki}
+          onHover={(i) => setWiki((w) => (w ? { ...w, active: i } : w))}
+        />
+      ) : null}
+    </div>
+  )
 }

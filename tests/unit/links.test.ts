@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   backlinksOf,
+  linkAt,
   outgoingLinksOf,
   outgoingRefs,
   pendingLinksOf,
@@ -178,5 +179,40 @@ describe('反链与出链', () => {
   it('同一篇里引用两次只列一条', () => {
     const out = outgoingLinksOf({ 'a.md': '[x](b.md)\n\n再来一次 [x](b.md)\n', 'b.md': '' }, 'a.md')
     expect(out).toHaveLength(1)
+  })
+})
+
+describe('linkAt：双击落在哪条链接上', () => {
+  const text = '看 [[项目/周计划]] 和 [语法](语法示例.md)，还有 [官网](https://example.com)。'
+
+  it('落在双链范围内算命中', () => {
+    const hit = linkAt(text, text.indexOf('周计划'))
+    expect(hit?.kind).toBe('wiki')
+    expect(hit?.target).toBe('项目/周计划')
+  })
+
+  it('落在标准链接上，站内是 path、外链是 url', () => {
+    expect(linkAt(text, text.indexOf('语法'))?.kind).toBe('path')
+    expect(linkAt(text, text.indexOf('官网'))?.kind).toBe('url')
+  })
+
+  it('落在空白处什么都不做（免得手一抖就跳走）', () => {
+    expect(linkAt(text, 0)).toBeNull()
+    expect(linkAt(text, text.length)).toBeNull()
+  })
+
+  it('`[[某篇|字样]]` 只取前半段当目标', () => {
+    const t = '[[开始这里|首页]]'
+    expect(linkAt(t, 3)?.target).toBe('开始这里')
+  })
+
+  it('图片不算链接（不是跳转）', () => {
+    const t = '![](附件/a.png)'
+    expect(linkAt(t, 3)).toBeNull()
+  })
+
+  it('带小节的双链整条都留着小节', () => {
+    const t = '[[周计划#本周]]'
+    expect(linkAt(t, 4)?.target).toBe('周计划#本周')
   })
 })

@@ -8,6 +8,7 @@ import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/not
 import { parentOf, stemOf } from './core/model/path'
 import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/rename'
 import { resolvePath, resolveWiki, titleOf, wikiSection } from './core/markdown/links'
+import { outlineOf } from './core/markdown/parse'
 import { decodeBytes, encodeText } from './core/model/text'
 import {
   iconsOf,
@@ -708,6 +709,19 @@ export function App() {
   }
 
   /** 设 / 清某个文件夹的图标。存的是字符，不是图片路径 */
+  /** `[[` 提示要的清单：每篇带自己的小节，插出去是 `[[路径#小节]]` */
+  const linkTargets = useMemo(
+    () =>
+      Object.keys(files)
+        .sort((a, b) => a.localeCompare(b, 'zh'))
+        .map((p) => ({
+          path: p,
+          title: titleOf(files, p),
+          headings: outlineOf(files[p] ?? '').map((h) => h.text),
+        })),
+    [files],
+  )
+
   function setDirIcon(path: string, icon: string) {
     const nextMeta = setIcon(parseVault(vaultRaw.current), path, icon)
     setIcons(iconsOf(nextMeta))
@@ -898,6 +912,7 @@ export function App() {
                   host={phase.host}
                   onJump={jumpTo}
                   notes={Object.keys(files).map((p) => ({ path: p, title: titleOf(files, p) }))}
+                  linkTargets={linkTargets}
                   /*
                    * ⚠️ 必须按**这一栏自己的** active 算，不能用全局 current（那是焦点栏的文档）。
                    * 用全局值时：非焦点栏里的 .note 拿不到 noteDir，块编辑器不渲染；

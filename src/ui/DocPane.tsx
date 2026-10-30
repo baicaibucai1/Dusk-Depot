@@ -61,6 +61,8 @@ type Props = {
   onAnchorDone: () => void
   /** 双链选择器要的清单 */
   notes: { path: string; title: string }[]
+  /** `[[` 提示要的清单：每篇带自己的小节 */
+  linkTargets?: { path: string; title: string; headings: string[] }[]
   /** 当前文档是不是 `.note`（是的话用块编辑器，不用 markdown 编辑器） */
   noteDir: string | null
   /** 块编辑器把大纲/正文报给上层（右栏要用） */
@@ -91,6 +93,7 @@ export function DocPane({
   anchor,
   onAnchorDone,
   notes,
+  linkTargets,
   noteDir,
   onNoteInfo,
 }: Props) {
@@ -425,6 +428,8 @@ export function DocPane({
               live={mode === 'preview'}
               onChange={(next) => onChange(active, next)}
               onContext={setCtx}
+              onJump={onJump}
+              linkTargets={linkTargets}
               onOpenTable={(from, to) => {
                 // 点渲染出来的表格：把那段 markdown 解回单元格 + 对齐
                 const blk = parseMarkdown(text.slice(from, to)).find((b) => b.t === 'table')

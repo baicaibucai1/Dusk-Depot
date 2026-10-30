@@ -98,53 +98,102 @@ const LEVELS: { level: number | null; label: string; cls: string }[] = [
 ]
 
 /**
- * 插入链接时的选择器。
+ * 链接卡片：显示字样 + 地址，两栏都填。
  *
- * 写出去的是**标准 markdown**：`[标题](路径)` —— 别的工具也认。
- * 旧的 `[[双链]]` 仍然能读、能跳，但不再作为新的写入格式。
+ * 之前只有一个搜索列表 —— 点了就插 `[标题](路径)`，用户想改显示字样还得回正文里改。
+ * 现在两件事都在这张卡上做完：先填字，再填地址，或者从库里挑一条自动带出来。
+ *
+ * 写出去的永远是标准 markdown：`[字样](地址)` —— 别的工具都认。
  */
-function LinkPicker({
+function LinkCard({
   notes,
-  onPick,
+  onInsert,
 }: {
   notes: { path: string; title: string }[]
-  onPick: (n: { path: string; title: string }) => void
+  onInsert: (label: string, href: string) => void
 }) {
+  const [label, setLabel] = useState('')
+  const [href, setHref] = useState('')
   const [q, setQ] = useState('')
   const key = q.trim().toLowerCase()
   const hits = key
-    ? notes.filter(
-        (n) => n.title.toLowerCase().includes(key) || n.path.toLowerCase().includes(key),
-      )
+    ? notes.filter((n) => n.title.toLowerCase().includes(key) || n.path.toLowerCase().includes(key))
     : notes
 
+  const ready = href.trim().length > 0
+  const field =
+    'mb-1.5 flex items-center gap-1.5 rounded-md border border-line bg-surface px-2 focus-within:border-green/50'
+  const input = 'h-7 min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-ink outline-none'
+
   return (
-    <div style={{ width: 260 }} className="p-1">
-      <input
-        autoFocus
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="搜标题或路径…"
-        aria-label="搜索要链接的笔记"
-        className="mb-1 h-7 w-full rounded-md border border-line bg-surface px-2 text-[12px] text-ink outline-none focus:border-green/50"
-      />
-      <div className="max-h-56 overflow-y-auto">
+    <div style={{ width: 276 }} className="p-1.5">
+      <label className={field}>
+        <span className="w-9 shrink-0 text-[10.5px] text-ink-3">字样</span>
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="点开看这篇"
+          aria-label="链接显示字样"
+          className={input}
+        />
+      </label>
+      <label className={field}>
+        <span className="w-9 shrink-0 text-[10.5px] text-ink-3">地址</span>
+        <input
+          value={href}
+          onChange={(e) => setHref(e.target.value)}
+          placeholder="项目/周计划.md 或 https://"
+          aria-label="链接地址"
+          className={input}
+        />
+      </label>
+
+      <div className="mt-2 mb-1 flex items-center gap-1.5">
+        <span className="text-[10.5px] tracking-wide text-ink-3">从库里选</span>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜标题…"
+          aria-label="搜索要链接的笔记"
+          className="ml-auto h-6 w-[118px] rounded border border-line bg-surface px-1.5 text-[11px] text-ink outline-none focus:border-green/50"
+        />
+      </div>
+      <div className="max-h-[132px] overflow-y-auto">
         {hits.length === 0 ? (
           <p className="px-2 py-2 text-[11.5px] text-ink-3">没有匹配的笔记</p>
         ) : (
-          hits.map((n) => (
+          hits.slice(0, 40).map((n) => (
             <button
               key={n.path}
               type="button"
-              onClick={() => onPick(n)}
+              onClick={() => {
+                setLabel(n.title)
+                setHref(n.path)
+              }}
               title={n.path}
-              className="flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+              className={`flex w-full flex-col items-start rounded-md px-2 py-1 text-left transition-colors hover:bg-surface-2 ${
+                href === n.path ? 'bg-green-soft' : ''
+              }`}
             >
-              <span className="max-w-full truncate text-[12.5px] text-ink">{n.title}</span>
-              <span className="max-w-full truncate text-[10.5px] text-ink-3">{n.path}</span>
+              <span className="max-w-full truncate text-[12px] text-ink">{n.title}</span>
+              <span className="max-w-full truncate text-[10px] text-ink-3">{n.path}</span>
             </button>
           ))
         )}
+      </div>
+
+      <div className="mt-1.5 flex items-center gap-1.5 border-t border-line pt-1.5">
+        <span className="text-[10.5px] text-ink-3">
+          {ready ? `[${label || href}](${href})` : '地址填了才能插'}
+        </span>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => onInsert(label.trim() || href.trim(), href.trim())}
+          className="ml-auto h-6 rounded-md bg-green px-2.5 text-[11.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          插入
+        </button>
       </div>
     </div>
   )
@@ -363,10 +412,10 @@ export function FormatBar(p: FormatProps) {
           </button>
 
           <Popover open={picker === 'link'} onClose={close}>
-            <LinkPicker
+            <LinkCard
               notes={p.notes}
-              onPick={(n) => {
-                p.onInsert(`[${n.title}](${n.path})`)
+              onInsert={(label, href) => {
+                p.onInsert(`[${label}](${href})`)
                 close()
               }}
             />

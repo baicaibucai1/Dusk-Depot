@@ -218,3 +218,36 @@ export function wikiSection(target: string): string | null {
   const after = target.split('#')[1]
   return after ? (after.split('|')[0] ?? '').trim() || null : null
 }
+/**
+ * 光标/鼠标落在哪一条链接上 —— 双击跳转靠它。
+ *
+ * 为什么返回的是"范围命中"而不是"最近的链接"：
+ * 双击一个字的中间也算命中，但双击两字之间的空白就该什么都不做，
+ * 免得手一抖就跳走。
+ */
+export type LinkHit = { target: string; kind: 'wiki' | 'path' | 'url'; from: number; to: number }
+
+export function linkAt(text: string, pos: number): LinkHit | null {
+  for (const m of text.matchAll(WIKI)) {
+    const from = m.index ?? 0
+    const to = from + m[0].length
+    if (pos < from || pos > to) continue
+    const raw = (m[1] ?? '').trim()
+    if (!raw) continue
+    // `[[某篇|显示字样]]` 只取前半段
+    return { target: raw.split('|')[0] ?? raw, kind: 'wiki', from, to }
+  }
+
+  for (const m of text.matchAll(STD_LINK)) {
+    const from = m.index ?? 0
+    const to = from + m[0].length
+    if (pos < from || pos > to) continue
+    const href = (m[1] ?? '').trim()
+    if (!href) continue
+    // 图片不是"跳转"
+    if (from > 0 && text[from - 1] === '!') continue
+    return { target: href, kind: EXTERNAL.test(href) ? 'url' : 'path', from, to }
+  }
+
+  return null
+}

@@ -65,6 +65,56 @@ function TaskBox({ checked, line }: { checked: boolean; line: number }) {
   )
 }
 
+
+/** 只在第一个分隔符处切一刀：`某篇#小节#还有` → ['某篇', '小节#还有'] */
+function splitOnce(v: string, sep: string): [string, string | null] {
+  const at = v.indexOf(sep)
+  return at < 0 ? [v, null] : [v.slice(0, at), v.slice(at + 1)]
+}
+
+/** 胶囊左边那个小链条，10px —— 比文字小一号，不抢行高 */
+function LinkGlyph() {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="translate-y-[1px] opacity-55"
+    >
+      <path d="M6.5 9.5 9.5 6.5" />
+      <path d="M9.8 4.2l1-1a2.6 2.6 0 0 1 3.7 3.7l-1 1" />
+      <path d="M6.2 11.8l-1 1a2.6 2.6 0 0 1-3.7-3.7l1-1" />
+    </svg>
+  )
+}
+
+/** 外链多一个"出去"的箭头 —— 站内跳转和开浏览器是两件事 */
+function ExternalGlyph() {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="translate-y-[1px] opacity-45"
+    >
+      <path d="M6 3h7v7" />
+      <path d="M13 3 7 9" />
+    </svg>
+  )
+}
+
 export function InlineView({ items }: { items: Inline[] }) {
   const jump = useContext(JumpContext)
   return (
@@ -101,22 +151,40 @@ export function InlineView({ items }: { items: Inline[] }) {
                 {it.v}
               </code>
             )
-          case 'wiki':
+          case 'wiki': {
+            /*
+             * 胶囊，不是换颜色。
+             * 双链是"这篇文档里的一块可点的东西"，跟正文同色只是变个颜色太弱了；
+             * 做成药丸一眼就知道这里能跳。`[[某篇#小节]]` 显示成 `某篇 › 小节`。
+             */
+            const [doc, section] = splitOnce(it.v, '#')
             return (
               <span
                 key={i}
-                className="cursor-pointer whitespace-nowrap"
+                role="link"
+                tabIndex={0}
+                data-dd-wiki
+                className="mx-px inline-flex cursor-pointer items-baseline gap-1 whitespace-nowrap rounded-full bg-green-soft px-[0.55em] py-[0.05em] text-[0.92em] text-green-deep align-baseline ring-1 ring-green/20 transition-shadow hover:ring-green/50"
                 title={jump ? `双击打开「${it.v}」` : it.v}
                 onDoubleClick={(e) => {
                   e.preventDefault()
                   jump?.(it.v, 'wiki')
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') jump?.(it.v, 'wiki')
+                }}
               >
-                <span className="text-ink-3/40">[[</span>
-                <span className="border-b border-green/30 pb-px text-green">{it.v}</span>
-                <span className="text-ink-3/40">]]</span>
+                <LinkGlyph />
+                <span>{doc}</span>
+                {section ? (
+                  <>
+                    <span className="text-green/45">›</span>
+                    <span>{section}</span>
+                  </>
+                ) : null}
               </span>
             )
+          }
           case 'tag':
             return (
               <span
@@ -135,15 +203,20 @@ export function InlineView({ items }: { items: Inline[] }) {
                 key={i}
                 role="link"
                 tabIndex={0}
-                className="cursor-pointer text-green underline decoration-green/35 underline-offset-2"
+                data-dd-link
+                className="mx-px inline-flex cursor-pointer items-baseline gap-1 whitespace-nowrap rounded-full bg-green-soft px-[0.55em] py-[0.05em] text-green-deep no-underline ring-1 ring-green/20 transition-shadow hover:ring-green/50"
                 title={jump ? `双击打开 ${it.href}` : it.href}
                 onDoubleClick={(e) => {
                   e.preventDefault()
                   jump?.(it.href, external ? 'url' : 'path')
                 }}
               >
+                <LinkGlyph />
                 {/* 链接文字里也允许行内语法：`[**粗体**](地址)` */}
-                <InlineView items={tokenize(it.v)} />
+                <span>
+                  <InlineView items={tokenize(it.v)} />
+                </span>
+                {external ? <ExternalGlyph /> : null}
               </a>
             )
           }
