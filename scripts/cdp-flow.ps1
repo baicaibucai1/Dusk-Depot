@@ -519,7 +519,15 @@ Check '打开旧笔记不写盘' ((Num 'window.__log.length') -eq $logBeforeV1) 
 Check 'v1 块文件里 layout 还在' ([bool]((Eval 'window.__files["旧画布.note/blocks/b1.json"]?.text') -match 'layout')) ''
 
 Write-Host ''
-Write-Host 'N. 控制台'
+Write-Host 'N. Markdown 编辑器：既有 flushSync 基线'
+if (-not (ClickRow '笔记')) { Write-Host 'FAIL  点不到笔记'; $fail++ }
+Start-Sleep -Milliseconds 1300
+Check 'md 编辑器正常挂载' ((Num 'document.querySelectorAll(".cm-editor").length') -eq 1) ''
+$fs = Num 'window.__errs.filter((e) => e.indexOf("flushSync") >= 0).length'
+Write-Host "   [baseline] flushSync 警告 $fs 条 —— 既有基线（CodeMirror 挂载期），不计入通过/失败"
+
+Write-Host ''
+Write-Host 'O. 控制台'
 $errs = Eval 'window.__errs.join(" || ")'
 Check '没有新增 React/ProseMirror 报错' ([string]::IsNullOrEmpty("$errs") -or -not ($errs -match 'ProseMirror|react|React|flushSync')) "errs=$errs"
 
