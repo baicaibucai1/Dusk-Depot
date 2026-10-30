@@ -117,6 +117,9 @@ const theme = EditorView.theme(
     },
     '.dd-nothing': { display: 'none' },
     '.dd-math-raw': { color: 'var(--color-green)' },
+    // 渲染出来的行内公式是可点的（点进去就还原成源码），光标要给个提示
+    '.dd-math': { cursor: 'text', borderRadius: '4px', padding: '0 1px' },
+    '.dd-math:hover': { background: 'var(--color-green-soft)' },
     /*
      * 链接做成胶囊，不是换个颜色。
      * 用 inset 阴影画描边而不是 border —— border 会改变行高，整段文字会抖。
@@ -314,20 +317,56 @@ class Check extends WidgetType {
   }
 }
 
-/** 行内公式：$x$ 直接渲染成 KaTeX */
+/**
+ * 行内公式：$x$ 直接渲染成 KaTeX。
+ *
+ * ⚠️ 这个 widget **必须可点**。CM6 的 `WidgetType.ignoreEvent()` 默认返回 true，
+ *    意思是"组件里发生的鼠标事件，编辑器一概不处理" —— 于是点在渲染出来的公式上
+ *    光标不动，公式永远不还原成源码，人就没法改它（用户的原话：无法交互）。
+ *    所以这里自己接管 mousedown：把光标送进公式范围，StateField 收到 selection
+ *    变化后会重建装饰，源码随即露出来。
+ */
 class MathWidget extends WidgetType {
-  constructor(private readonly tex: string) {
+  constructor(
+    private readonly tex: string,
+    /** 公式在文档里的起始偏移（含开头的 $） */
+    private readonly at: number,
+    /** 开头定界符长度：`$…$` 是 1，`$$…$$` 是 2 */
+    private readonly open: number,
+  ) {
     super()
   }
   override eq(other: MathWidget) {
-    return other.tex === this.tex
+    return other.tex === this.tex && other.at === this.at && other.open === this.open
   }
   override toDOM() {
     const el = document.createElement('span')
     el.className = 'dd-math'
+    el.title = '点一下编辑公式'
     const root = createRoot(el)
     root.render(<MathView tex={this.tex} />)
     ;(el as DomWithRoot).__root = root
+
+    el.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const view = EditorView.findFromDOM(el)
+      if (!view) return
+      /*
+       * 落点按点击的左右半边定：
+       *   点左半 → 公式开头（想改第一个符号）
+       *   点右半 → 公式末尾（想接着写）
+       * KaTeX 的排版和源码位置对不上，做不了"精确到字符"，但两档已经比
+       * 永远跳开头自然得多。
+       */
+      const box = el.getBoundingClientRect()
+      const right = e.clientX > box.left + box.width / 2
+      const anchor = right ? this.at + this.open + this.tex.length : this.at + this.open
+      view.dispatch({ selection: { anchor }, scrollIntoView: true })
+      view.focus()
+    })
+
     return el
   }
   override destroy(el: HTMLElement) {
@@ -603,7 +642,7 @@ function decorateLine(
     out.push(
       inElement(absFrom, absTo)
         ? mark('dd-math-raw').range(absFrom, absTo)
-        : Decoration.replace({ widget: new MathWidget(m[1] ?? "") }).range(absFrom, absTo),
+        : Decoration.replace({ widget: new MathWidget(m[1] ?? "", absFrom, 2) }).range(absFrom, absTo),
     )
   }
 
@@ -619,7 +658,7 @@ function decorateLine(
     out.push(
       inElement(absFrom, absTo)
         ? mark('dd-math-raw').range(absFrom, absTo)
-        : Decoration.replace({ widget: new MathWidget(m[1] ?? "") }).range(absFrom, absTo),
+        : Decoration.replace({ widget: new MathWidget(m[1] ?? "", absFrom, 1) }).range(absFrom, absTo),
     )
   }
 
