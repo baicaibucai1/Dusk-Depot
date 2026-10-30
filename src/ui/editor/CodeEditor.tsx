@@ -12,20 +12,15 @@ import {
 } from '@codemirror/view'
 import { tags as tg } from '@lezer/highlight'
 import { createRoot, type Root } from 'react-dom/client'
-import { Prec } from '@codemirror/state'
 import type { Block } from '../../core/markdown/parse'
 import type { Align } from '../../core/markdown/parse'
 import { parseMarkdown, trimUrlTail } from '../../core/markdown/parse'
-import { type WikiItem, wikiOptions, wikiQueryAt } from '../../core/markdown/linkComplete'
 import { linkAt } from '../../core/markdown/links'
-import { mathContextAt, placeCaret } from '../../core/markdown/mathPanel'
 import { tableAt } from '../../core/markdown/table'
 import { Math as MathView } from '../Math'
-import { MathPanel } from '../MathPanel'
-import { WikiPicker } from '../WikiPicker'
 import { resolveImage } from '../markdown/imageStore'
 import { BlockView } from '../markdown/render'
-import { useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useRef } from 'react'
 import type { Ref } from 'react'
 
 /*
@@ -775,6 +770,8 @@ type Props = {
   onContext: (ctx: EditorContext) => void
   /** 点了渲染出来的表格（用网格编辑器打开） */
   onOpenTable: (from: number, to: number) => void
+  /** 点了渲染出来的块公式（用弹窗编辑） */
+  onOpenMath?: (from: number, to: number) => void
   /** 双击双链 / 链接时跳过去 */
   onJump?: (target: string, kind: 'wiki' | 'path' | 'url') => void
   /** `[[` 提示要的清单：每篇带可选的小节 */
@@ -789,8 +786,6 @@ export type EditorHandle = {
   linePrefix: (prefix: string) => void
   /** 原地插入一段（表格骨架这类多行东西） */
   insert: (text: string) => void
-  /** 插一个块公式，并把光标放进两个 $$ 之间 */
-  insertMathBlock: () => void
   /** 把当前行设成某一级标题（null = 正文） */
   setHeading: (level: number | null) => void
   /** 光标所在的那张表；不在表格里返回 null。align 按列，保存时原样写回 */
@@ -914,6 +909,7 @@ export function CodeEditor({
   onChange,
   onContext,
   onOpenTable,
+  onOpenMath,
   onJump,
   linkTargets,
   ref,
@@ -923,46 +919,11 @@ export function CodeEditor({
   const emit = useRef(onChange)
   const emitCtx = useRef(onContext)
   const onTableClick = useRef(onOpenTable)
+  const onMathClick = useRef(onOpenMath)
   const jump = useRef(onJump)
   const targets = useRef(linkTargets ?? [])
   const slot = useRef(new Compartment())
-  /** 光标在公式里时，快速面板的锚点（相对编辑器容器） */
-  const [math, setMath] = useState<{ kind: 'inline' | 'block'; x: number; y: number } | null>(null)
-  /** 正在输 `[[`：候选、高亮项、锚点 */
-  const [wiki, setWiki] = useState<{
-    from: number
-    items: WikiItem[]
-    active: number
-    x: number
-    y: number
-  } | null>(null)
-  /** 键盘处理要读到最新的 wiki，不能靠闭包里那份 */
-  const wikiRef = useRef<typeof wiki>(null)
-  wikiRef.current = wiki
 
-  /** 选了一条候选：把 `[[已输入` 整段换成 `[[路径]]` */
-  function applyWiki(item: WikiItem) {
-    const v = view.current
-    const w = wikiRef.current
-    if (!v || !w) return
-    const head = v.state.selection.main.head
-    v.dispatch({
-      changes: { from: w.from, to: head, insert: item.insert },
-      selection: { anchor: w.from + item.insert.length },
-    })
-    setWiki(null)
-    v.focus()
-  }
-
-  /** 插一段 LaTeX：`$0` 是插件带来的光标位，插完把光标放到那儿 */
-  function insertMath(tex: string) {
-    const v = view.current
-    if (!v) return
-    const { text, caret } = placeCaret(tex)
-    const pos = v.state.selection.main.head
-    v.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + caret } })
-    v.focus()
-  }
 
 
   useImperativeHandle(
@@ -979,15 +940,6 @@ export function CodeEditor({
       insert: (text) => {
         const v = view.current
         if (v) insertText(v, text)
-      },
-      insertMathBlock: () => {
-        const v = view.current
-        if (!v) return
-        const pos = v.state.selection.main.head
-        const text = '\n$$\n\n$$\n'
-        // `\n$$\n` 正好 4 个字符 —— 光标落进中间那行，用户接着就能打公式
-        v.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + 4 } })
-        v.focus()
       },
       setHeading: (level) => {
         const v = view.current
@@ -1023,75 +975,16 @@ export function CodeEditor({
     emit.current = onChange
     emitCtx.current = onContext
     onTableClick.current = onOpenTable
+    onMathClick.current = onOpenMath
     jump.current = onJump
     targets.current = linkTargets ?? []
-  }, [onChange, onContext, onOpenTable, onJump, linkTargets])
+  }, [onChange, onContext, onOpenTable, onOpenMath, onJump, linkTargets])
 
   // 只在换文件时重建
   useEffect(() => {
     const el = host.current
     if (!el) return
 
-    /*
-     * 公式面板的锚点：只有在光标真的落在 `$…$` / `$$…$$` 里才冒出来。
-     * 位置按编辑器容器的坐标算，跟着光标走；下方放不下就翻到上面。
-     */
-    const PANEL_H = 252
-    const syncMath = (v: EditorView) => {
-      const pos = v.state.selection.main.head
-      const ctx = mathContextAt(v.state.doc.toString(), pos)
-      const el = host.current
-      if (!ctx || !el) {
-        setMath(null)
-        return
-      }
-      const c = v.coordsAtPos(pos)
-      if (!c) {
-        setMath(null)
-        return
-      }
-      const box = el.getBoundingClientRect()
-      const below = c.bottom - box.top + 6
-      const flip = below + PANEL_H > box.height && c.top - box.top - PANEL_H > 0
-      setMath({
-        kind: ctx.kind,
-        x: Math.min(c.left - box.left, Math.max(0, box.width - 308)),
-        y: flip ? c.top - box.top - PANEL_H - 6 : below,
-      })
-    }
-
-    /** `[[` 提示：光标前是没收尾的 `[[` 就把候选摆出来，贴着光标 */
-    const syncWiki = (v: EditorView) => {
-      const pos = v.state.selection.main.head
-      const q = wikiQueryAt(v.state.doc.toString(), pos)
-      const el = host.current
-      if (!q || !el) {
-        setWiki(null)
-        return
-      }
-      const items = wikiOptions(targets.current, q.typed)
-      if (items.length === 0) {
-        setWiki(null)
-        return
-      }
-      const c = v.coordsAtPos(pos)
-      if (!c) {
-        setWiki(null)
-        return
-      }
-      const box = el.getBoundingClientRect()
-      const H = 232
-      const below = c.bottom - box.top + 4
-      const flip = below + H > box.height && c.top - box.top - H > 0
-      setWiki((prev) => ({
-        from: q.from,
-        items,
-        // 同一段输入里保留高亮位置；换了位置就回到第一条
-        active: prev && prev.from === q.from ? Math.min(prev.active, items.length - 1) : 0,
-        x: Math.min(c.left - box.left, Math.max(0, box.width - 276)),
-        y: flip ? c.top - box.top - H - 4 : below,
-      }))
-    }
 
     const v = new EditorView({
       parent: el,
@@ -1106,50 +999,6 @@ export function CodeEditor({
           slot.current.of(decos(live)),
           theme,
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          /*
-           * `[[` 提示的键盘接管。必须是最高优先级：
-           * 上下键/回车/ Esc 在编辑器里本来有别的含义，浮层开着时得先归它。
-           */
-          Prec.highest(
-            keymap.of([
-              {
-                key: 'ArrowDown',
-                run: () => {
-                  const w = wikiRef.current
-                  if (!w) return false
-                  setWiki({ ...w, active: (w.active + 1) % w.items.length })
-                  return true
-                },
-              },
-              {
-                key: 'ArrowUp',
-                run: () => {
-                  const w = wikiRef.current
-                  if (!w) return false
-                  setWiki({ ...w, active: (w.active - 1 + w.items.length) % w.items.length })
-                  return true
-                },
-              },
-              {
-                key: 'Enter',
-                run: () => {
-                  const w = wikiRef.current
-                  if (!w) return false
-                  const item = w.items[w.active]
-                  if (item) applyWiki(item)
-                  return true
-                },
-              },
-              {
-                key: 'Escape',
-                run: () => {
-                  if (!wikiRef.current) return false
-                  setWiki(null)
-                  return true
-                },
-              },
-            ]),
-          ),
           /*
            * 编辑模式里跳转有两把钥匙：
            *   · 双击 —— 手不用离开鼠标
@@ -1188,8 +1037,6 @@ export function CodeEditor({
             const inTable = Boolean(tableAt(st.doc.toString().split("\n"), line.number))
 
             emitCtx.current({ inTable, heading: h ? (h[1] ?? "").length : null })
-            syncMath(u.view)
-            syncWiki(u.view)
           }),
         ],
       }),
@@ -1201,6 +1048,11 @@ export function CodeEditor({
     BLOCK_CLICK.set(v, (from, to, kind) => {
       if (kind === 'table') {
         onTableClick.current?.(from, to)
+        return
+      }
+      // 块公式：交给外层弹窗编辑，不在正文里改
+      if (kind === 'mathblock') {
+        onMathClick.current?.(from, to)
         return
       }
       v.dispatch({ selection: { anchor: from }, scrollIntoView: true })
@@ -1242,20 +1094,6 @@ export function CodeEditor({
   return (
     <div className="relative h-full">
       <div ref={host} className="h-full" />
-      {math ? (
-        <MathPanel kind={math.kind} x={math.x} y={math.y} onClose={() => setMath(null)} onPick={insertMath} />
-      ) : null}
-      {wiki ? (
-        <WikiPicker
-          items={wiki.items}
-          active={wiki.active}
-          x={wiki.x}
-          y={wiki.y}
-          onPick={applyWiki}
-          onHover={(i) => setWiki((w) => (w ? { ...w, active: i } : w))}
-          onClose={() => setWiki(null)}
-        />
-      ) : null}
     </div>
   )
 }

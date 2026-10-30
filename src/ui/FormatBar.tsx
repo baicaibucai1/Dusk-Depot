@@ -34,8 +34,10 @@ export type FormatProps = {
   onWrap: (before: string, after: string, placeholder: string) => void
   onPrefix: (prefix: string) => void
   onInsert: (text: string) => void
-  /** 插一个块公式，光标落在两个 $$ 之间 */
-  onMathBlock: () => void
+  /** 打开公式弹窗（新建块公式） */
+  onMathDialog: () => void
+  /** 打开引用弹窗（选一篇/一节插双链） */
+  onLinkDialog: () => void
   onHeading: (level: number | null) => void
   onInsertTable: (rows: number, cols: number) => void
   onEditTable: () => void
@@ -399,7 +401,7 @@ export function FormatBar(p: FormatProps) {
         <button type="button" disabled={p.disabled} title="行内公式" aria-label="行内公式" className={BTN} onClick={() => p.onWrap('$', '$', 'E=mc^2')}>
           <IconSigma className="size-4" />
         </button>
-        <button type="button" disabled={p.disabled} title="块级公式（光标会停在公式里）" aria-label="块级公式" className={BTN} onClick={() => p.onMathBlock()}>
+        <button type="button" disabled={p.disabled} title="块级公式（光标会停在公式里）" aria-label="块级公式" className={BTN} onClick={() => p.onMathDialog()}>
           <IconMathBlock className="size-4" />
         </button>
 
@@ -433,6 +435,17 @@ export function FormatBar(p: FormatProps) {
         </button>
         <button type="button" disabled={p.disabled} title="链接" aria-label="链接" className={BTN} onClick={() => p.onWrap('[', '](https://)', '文字')}>
           <IconLink className="size-4" />
+        </button>
+
+        <button
+          type="button"
+          disabled={p.disabled}
+          title="引用一篇（可选到小节）"
+          aria-label="引用一篇"
+          className={BTN}
+          onClick={() => p.onLinkDialog()}
+        >
+          <IconBrackets className="size-4" />
         </button>
 
         <div className="relative">

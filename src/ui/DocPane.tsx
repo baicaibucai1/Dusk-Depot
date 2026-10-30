@@ -19,6 +19,8 @@ const NoteEditor = lazy(() =>
 )
 import { TableEditor } from './TableEditor'
 import { BlockView, JumpContext, TaskContext, type JumpKind } from './markdown/render'
+import { LinkDialog } from './LinkDialog'
+import { MathDialog } from './MathDialog'
 import type { EditorContext } from './editor/CodeEditor'
 import type { EditorHandle } from './editor/CodeEditor'
 import { IconBook, IconCode, IconPanelRight, IconPen, IconSplit } from './icons'
@@ -204,6 +206,14 @@ export function DocPane({
   const [ctx, setCtx] = useState<EditorContext>({ inTable: false, heading: null })
   /** 正在编辑的表格（null = 没打开编辑器）。align 按列，保存时原样写回 */
   const [tableDraft, setTableDraft] = useState<{ from: number; to: number; cells: string[][]; align: Align[] } | null>(null)
+  /** 公式弹窗：initial 为空 = 新建；带 range = 改已有的那一块 */
+  const [mathDlg, setMathDlg] = useState<{
+    initial: string
+    kind: 'inline' | 'block'
+    range: { from: number; to: number } | null
+  } | null>(null)
+  /** 引用弹窗 */
+  const [linkDlg, setLinkDlg] = useState(false)
 
   /**
    * 笔记里写的 CSS 只该作用于**这一篇**。每栏一个唯一标记，
@@ -320,7 +330,8 @@ export function DocPane({
           }
           onPrefix={(prefix) => editorRef.current?.linePrefix(prefix)}
           onInsert={(text) => editorRef.current?.insert(text)}
-          onMathBlock={() => editorRef.current?.insertMathBlock()}
+          onMathDialog={() => setMathDlg({ initial: '', kind: 'block', range: null })}
+          onLinkDialog={() => setLinkDlg(true)}
           onHeading={(level) => editorRef.current?.setHeading(level)}
           onInsertTable={(rows, cols) => {
             const table = buildTable(emptyTable(Math.max(0, rows - 1), cols))
@@ -431,6 +442,12 @@ export function DocPane({
               onContext={setCtx}
               onJump={onJump}
               linkTargets={linkTargets}
+              onOpenMath={(from, to) => {
+                const raw = text.slice(from, to)
+                // 把 `$$ … $$` 里面那段取出来
+                const inner = raw.replace(/^\$\$/, '').replace(/\$\$$/, '').trim()
+                setMathDlg({ initial: inner, kind: 'block', range: { from, to } })
+              }}
               onOpenTable={(from, to) => {
                 // 点渲染出来的表格：把那段 markdown 解回单元格 + 对齐
                 const blk = parseMarkdown(text.slice(from, to)).find((b) => b.t === 'table')
@@ -453,6 +470,36 @@ export function DocPane({
           onApply={(cells, align) => {
             editorRef.current?.replaceRange(tableDraft.from, tableDraft.to, buildTable(cells, align))
             setTableDraft(null)
+          }}
+        />
+      ) : null}
+
+      {mathDlg ? (
+        <MathDialog
+          initial={mathDlg.initial}
+          kind={mathDlg.kind}
+          onCancel={() => setMathDlg(null)}
+          onApply={(tex) => {
+            const body = tex.trim()
+            const full = mathDlg.kind === 'block' ? `$$\n${body}\n$$` : `$${body}$`
+            if (mathDlg.range) {
+              editorRef.current?.replaceRange(mathDlg.range.from, mathDlg.range.to, full)
+            } else {
+              // 新建：前后各留一个空行，块公式才不会被并进上一段
+              editorRef.current?.insert(`\n${full}\n`)
+            }
+            setMathDlg(null)
+          }}
+        />
+      ) : null}
+
+      {linkDlg ? (
+        <LinkDialog
+          targets={linkTargets ?? []}
+          onCancel={() => setLinkDlg(false)}
+          onApply={(insert) => {
+            editorRef.current?.insert(insert)
+            setLinkDlg(false)
           }}
         />
       ) : null}
