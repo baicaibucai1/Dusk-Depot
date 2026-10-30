@@ -180,6 +180,8 @@ $cw = Num 'document.querySelector("[data-dd-pdf] canvas") ? document.querySelect
 Check 'canvas 画出来了（宽 > 100）' ($cw -gt 100) "w=$cw"
 $spans = Num 'document.querySelectorAll("[data-dd-pdf-text] span").length'
 Check '文本层有字（可选）' ($spans -ge 1) "n=$spans"
+$sel = Eval '(() => { const box = document.querySelector("[data-dd-pdf-text]"); if (!box) return ""; const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); const t = s.toString(); s.removeAllRanges(); return t })()'
+Check '文本真的能选中（selection 非空）' ([bool]("$sel" -match '\S')) "sel=$sel"
 
 [void](ClickIn '[data-dd-pdf]' '下一页'); Start-Sleep -Milliseconds 2400
 $pdfText2 = Eval 'document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ")'
