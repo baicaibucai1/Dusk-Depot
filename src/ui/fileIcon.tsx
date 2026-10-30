@@ -19,6 +19,7 @@ import {
   FileQuestion,
   FileSpreadsheet,
   FileText,
+  FileType,
   Folder,
   FolderOpen,
   type LucideIcon,
@@ -29,6 +30,8 @@ import { IconMarkdown } from './icons'
 const BY_KIND: Record<FileKind, LucideIcon | null> = {
   md: null, // 走 IconMarkdown
   text: FileText,
+  /* PDF 用"文件 + 字形"这一枚：和纯文本的 file-text 是两种形状，扫一眼能分开 */
+  pdf: FileType,
   code: FileCode,
   sheet: FileSpreadsheet,
   image: FileImage,

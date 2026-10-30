@@ -704,3 +704,32 @@
   border-color: rgba(14, 155, 102, 0.45);
   color: var(--color-green);
 }
+/*
+ * PDF 文本层（pdf.js 用）。
+ *
+ * 它把每个字按坐标绝对定位、颜色透明，盖在 canvas 上 —— 于是能选中、能复制。
+ * 这些规则来自 pdf.js 自己的 viewer 样式表，只取必须的那几条：
+ * 位置、透明、不换行、变换原点。少了任何一条都会出现"文字飘到左上角"。
+ */
+.dd-pdf-text {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 1;
+}
+.dd-pdf-text span,
+.dd-pdf-text br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.dd-pdf-text ::selection {
+  background: rgba(14, 155, 102, 0.25);
+}

@@ -3,6 +3,7 @@ import type { Snapshot } from './core/model/flush'
 import { diffRepo, flushRepo, settleBaseline } from './core/model/flush'
 import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
+import { kindOf, previewOf } from './core/model/fileKind'
 import { isNoteDocPath } from './core/note/format'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
 import { parentOf, stemOf } from './core/model/path'
@@ -41,6 +42,7 @@ import {
 import { memoryIsEmpty, memorySeed } from './hosts/memory'
 import { isTauri } from './hosts/tauri'
 import { Aside } from './ui/Aside'
+import { AssetInfo } from './ui/AssetInfo'
 import { SettingsDialog } from './ui/SettingsDialog'
 import { applySettings, loadSettings, resetSettings, saveSettings, type Settings } from './ui/settings'
 import { DocPane } from './ui/DocPane'
@@ -98,7 +100,7 @@ function allDirs(nodes: ReturnType<typeof buildTreeFromEntries>): string[] {
 /** `.zzq` 里写的东西：一眼能看出这是谁的标记 */
 async function readRepo(
   host: Host,
-): Promise<Snapshot & { hasMark: boolean; notes: string[] }> {
+): Promise<Snapshot & { hasMark: boolean; notes: string[]; assets: string[] }> {
   const entries = await host.list()
 
   /*
@@ -110,15 +112,30 @@ async function readRepo(
     .map((e) => e.path)
   const underNote = (p: string) => noteRoots.some((root) => p === root || p.startsWith(`${root}/`))
 
-  // 只收 md 和目录；点开头的和仓库标记 `.zzq` 都不进列表
+  /*
+   * 树里收三类：目录、md、以及**能在中间区预览的**图片 / PDF。
+   *
+   * 为什么不是"列全部文件"：树里出现的每一项都得能点开做点什么。
+   * txt / zip 这一版既不能编辑也不能预览，列出来只是让人点一下没反应。
+   *
+   * 图片和 PDF **只记路径**，不在这里读字节 —— 一个库里有几百张图时，
+   * 打开仓库那一刻全读进内存是没道理的。真打开时再由查看器按需读。
+   */
   const keep = entries.filter((e) => {
     if (underNote(e.path)) return false
-    return e.kind === 'dir' ? isListable(e.path) : isNote(e.path) && isListable(e.path)
+    if (!isListable(e.path)) return false
+    if (e.kind === 'dir') return true
+    return isNote(e.path) || previewOf(e.path) !== null
   })
+  const assets = keep
+    .filter((e) => e.kind === 'file' && !isNote(e.path))
+    .map((e) => e.path)
 
   const files: FileMap = {}
   for (const e of keep) {
     if (e.kind !== 'file') continue
+    // 图片 / PDF 不进 FileMap：那张表只装**文本**，二进制进去就是乱码
+    if (!isNote(e.path)) continue
     try {
       // 体积上限在这里按字节判断 —— 宿主的 list() 为了速度不 stat 文件
       const bytes = await host.read(e.path)
@@ -134,6 +151,7 @@ async function readRepo(
     dirs: keep.filter((e) => e.kind === 'dir').map((e) => e.path),
     hasMark: entries.some((e) => e.path === VAULT_MARK),
     notes: noteRoots,
+    assets,
   }
 }
 
@@ -171,6 +189,8 @@ export function App() {
   const [dirs, setDirs] = useState<string[]>([])
   /** `.note` 目录（目录即文档，树里当叶子显示） */
   const [noteDocs, setNoteDocs] = useState<string[]>([])
+  /** 图片 / PDF 的路径。只存路径 —— 字节在真正打开时才按需读 */
+  const [assets, setAssets] = useState<string[]>([])
   /** 分栏：每栏有自己的标签与当前文档，最多 3 栏 */
 
   const [panes, setPanes] = useState<PaneState[]>(() => [{ id: 1, tabs: [], active: null }])
@@ -243,6 +263,7 @@ export function App() {
           ...dirs.map((d) => ({ path: d, kind: 'dir' as const })),
           ...Object.keys(files).map((f) => ({ path: f, kind: 'file' as const })),
           ...noteDocs.map((n) => ({ path: n, kind: 'file' as const })),
+          ...assets.map((a) => ({ path: a, kind: 'file' as const })),
         ],
         // 置顶的按加入顺序排在最前，其余给个大数
         (p) => {
@@ -250,7 +271,7 @@ export function App() {
           return i < 0 ? 1e9 : i
         },
       ),
-    [dirs, files, pins, noteDocs],
+    [dirs, files, pins, noteDocs, assets],
   )
 
   const adopt = useCallback(async (host: Host, ref: RepoRef) => {
@@ -265,6 +286,7 @@ export function App() {
       setFiles(loaded.files)
       setDirs(loaded.dirs)
       setNoteDocs(loaded.notes)
+      setAssets(loaded.assets)
       setExpanded(
         new Set(
           allDirs(
@@ -736,7 +758,7 @@ export function App() {
     setFiles((prev) => ({ ...prev, [path]: text }))
   }
 
-  const taken = (p: string) => p in files || dirs.includes(p)
+  const taken = (p: string) => p in files || dirs.includes(p) || assets.includes(p)
 
   function createNote(dir: string): string | null {
     const path = uniquePath(notePath(dir, '未命名'), taken)
@@ -821,6 +843,26 @@ export function App() {
   }
 
   function doDelete(path: string) {
+    // 图片 / PDF 不在 files 里：直接让宿主删掉，再把它从树、标签、账本里清掉
+    if (assets.includes(path)) {
+      if (phase.t === 'ready') {
+        void phase.host.remove(path).catch((e) => console.warn('[dusk] 删不掉', path, e))
+      }
+      setAssets((prev) => prev.filter((a) => a !== path))
+      setPanes((prev) =>
+        prev.map((pane) => {
+          const tabs = pane.tabs.filter((t) => t !== path)
+          return { ...pane, tabs, active: pane.active === path ? (tabs[0] ?? null) : pane.active }
+        }),
+      )
+      const nextMeta = pruneMeta(parseVault(vaultRaw.current), [path])
+      setIcons(iconsOf(nextMeta))
+      if (nextMeta.pins.length !== pins.length) {
+        setPins(nextMeta.pins)
+        void writeVaultMeta({ pins: nextMeta.pins, files: nextMeta.files })
+      }
+      return
+    }
     const r = deleteEntry(files, dirs, path)
     setFiles(r.files)
     setDirs(r.dirs)
@@ -999,6 +1041,26 @@ export function App() {
         反链/悬空链接用"md 文件 + 各 .note 正文"的合并表算。
       */}
       {lastDoc ? (
+        kindOf(lastDoc) !== 'md' && !noteDocs.includes(lastDoc) ? (
+          // 图片 / PDF：右栏没有大纲和反链可算，换成这一类文件真有的信息
+          <AssetInfo
+            path={lastDoc}
+            open={asideOpen}
+            width={rightW}
+            onClose={() => setAsideOpen(false)}
+            resizer={
+              <Resizer
+                side="right"
+                flush
+                width={rightW}
+                min={SIDEBAR_MIN}
+                max={SIDEBAR_MAX}
+                onChange={setRightW}
+                onReset={() => setRightW(SIDEBAR_DEFAULT.R)}
+              />
+            }
+          />
+        ) : (
           <Aside
             open={asideOpen}
             files={asideFiles}
@@ -1019,7 +1081,8 @@ export function App() {
               />
             }
           />
-        ) : null}
+        )
+      ) : null}
       </div>
 
       {settingsOpen ? (

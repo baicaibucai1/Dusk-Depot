@@ -11,6 +11,9 @@ import {
 import type { Host } from '../core/ports/host'
 import { hasImage, putImage } from './markdown/imageStore'
 import { labelOf, nameOf } from '../core/model/path'
+import { previewOf } from '../core/model/fileKind'
+import { ImageViewer } from './viewers/ImageViewer'
+import { PdfViewer } from './viewers/PdfViewer'
 import { FormatBar } from './FormatBar'
 import { emptyTable, buildTable } from '../core/markdown/table'
 /** 块编辑器和 TipTap 一起懒加载 —— 首屏不该为它付钱 */
@@ -120,6 +123,8 @@ export function DocPane({
    */
   useEffect(() => {
     if (!active) return
+    // 图片 / PDF 预览不走这条路（它们自己按需读字节）
+    if (previewOf(active)) return
     const refs = imageRefs(text).filter((p) => !hasImage(p))
     if (refs.length === 0) return
 
@@ -204,6 +209,9 @@ export function DocPane({
       }
       return next
     })
+
+  /** 这一栏打开的是图片 / PDF 时走只读预览，不进编辑器那条路 */
+  const preview = active ? previewOf(active) : null
 
   /** 光标上下文：在不在表格里、当前是几级标题 */
   const [ctx, setCtx] = useState<EditorContext>({ inTable: false, heading: null })
@@ -325,7 +333,7 @@ export function DocPane({
       </header>
 
       {/* 格式化工具条：正文顶上那一排。阅读模式里没有 —— 那儿不可编辑 */}
-      {active && mode !== 'read' && !noteDir ? (
+      {active && !preview && mode !== 'read' && !noteDir ? (
         <FormatBar
           disabled={!active}
           open={barOpen}
@@ -361,6 +369,7 @@ export function DocPane({
       <div
         className={noteDir ? 'hidden' : 'min-h-0 flex-1'}
         onPasteCapture={(e) => {
+          if (preview) return
           const files = Array.from(e.clipboardData?.files ?? [])
           if (files.length === 0) return
           void takeFiles(files).then((handled) => {
@@ -371,12 +380,14 @@ export function DocPane({
           })
         }}
         onDragOver={(e) => {
+          if (preview) return
           if (e.dataTransfer?.types.includes('Files')) {
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
           }
         }}
         onDrop={(e) => {
+          if (preview) return
           const files = Array.from(e.dataTransfer?.files ?? [])
           if (files.length === 0) return
           void takeFiles(files).then((handled) => {
@@ -387,7 +398,11 @@ export function DocPane({
           })
         }}
       >
-        {!active ? (
+        {active && preview === 'image' ? (
+          <ImageViewer host={host} path={active} />
+        ) : active && preview === 'pdf' ? (
+          <PdfViewer host={host} path={active} />
+        ) : !active ? (
           <div className="grid h-full place-items-center px-8">
             <div className="text-center">
               <p className="text-[15px] text-ink-2">从左边选一篇。</p>
@@ -513,7 +528,7 @@ export function DocPane({
         />
       ) : null}
 
-      {noteDir ? null : <footer className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t border-line pr-2 pl-3 text-[11px] text-ink-3">
+      {noteDir || preview ? null : <footer className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t border-line pr-2 pl-3 text-[11px] text-ink-3">
 
         <span className="ml-auto whitespace-nowrap tabular-nums">{text.length} 字</span>
 

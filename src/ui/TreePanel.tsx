@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { TreeNode } from '../core/model/library'
+import { isNote, type TreeNode } from '../core/model/library'
 import { labelOf } from '../core/model/path'
 import { TreeIcon } from './fileIcon'
 import type { FileMap } from '../core/model/library'
@@ -180,12 +180,18 @@ export function TreePanel({
           { label: '在右侧分栏打开', onSelect: () => onOpenSplit(path) },
         )
       }
+      // 改名走的是"文本文件按差异重写"那条路，图片/PDF 不在其中 —— 不给这个入口
+      const canRename = isDir || isNote(path)
       items.push(
         { label: '', onSelect: () => {}, divider: true },
-        {
-          label: '重命名',
-          onSelect: () => setRename({ path, value: path.slice(path.lastIndexOf('/') + 1) }),
-        },
+        ...(canRename
+          ? [
+              {
+                label: '重命名',
+                onSelect: () => setRename({ path, value: path.slice(path.lastIndexOf('/') + 1) }),
+              },
+            ]
+          : []),
         {
           label: pinned.includes(path) ? '取消置顶' : '置顶',
           onSelect: () => onTogglePin(path),
@@ -280,7 +286,7 @@ export function TreePanel({
       return (
         <div key={n.path}>
           <div
-            draggable={!editing}
+            draggable={!editing && (isDir || isNote(n.path))}
             onDragStart={(e) => {
               setDragging(n.path)
               e.dataTransfer.effectAllowed = 'move'

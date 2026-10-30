@@ -15,8 +15,10 @@ export type FileKind =
   | 'code'
   /** 表格类数据 */
   | 'sheet'
-  /** 图片 */
+  /** 图片：只读预览 */
   | 'image'
+  /** PDF：只读预览（多页、可选文本） */
+  | 'pdf'
   /** 压缩包 */
   | 'archive'
   /** 认不出的 */
@@ -27,7 +29,7 @@ const EXT_KIND: Record<string, FileKind> = {
   '.markdown': 'md',
   '.txt': 'text',
   '.log': 'text',
-  '.pdf': 'text',
+  '.pdf': 'pdf',
   '.epub': 'text',
   '.ts': 'code',
   '.tsx': 'code',
@@ -58,6 +60,7 @@ const EXT_KIND: Record<string, FileKind> = {
   '.jpeg': 'image',
   '.gif': 'image',
   '.webp': 'image',
+  '.avif': 'image',
   '.svg': 'image',
   '.bmp': 'image',
   '.ico': 'image',
@@ -75,4 +78,23 @@ export function kindOf(path: string): FileKind {
 /** 只有 md 能在这版里编辑；其余一律只读或交给系统（见方案书 D1） */
 export function canEdit(path: string): boolean {
   return kindOf(path) === 'md'
+}
+
+/** 能在中间工作区**只读预览**的类型；其余交给系统程序 */
+export type PreviewKind = 'image' | 'pdf'
+
+export function previewOf(path: string): PreviewKind | null {
+  const k = kindOf(path)
+  return k === 'image' || k === 'pdf' ? k : null
+}
+
+/** 图片预览认的扩展名 —— 和 EXT_KIND 保持同一份，别再各写一套 */
+const IMAGE_EXTS = new Set(
+  Object.entries(EXT_KIND)
+    .filter(([, k]) => k === 'image')
+    .map(([ext]) => ext),
+)
+
+export function isImagePath(path: string): boolean {
+  return IMAGE_EXTS.has(extOf(path).toLowerCase())
 }
