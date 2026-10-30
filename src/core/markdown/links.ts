@@ -60,8 +60,20 @@ export function outgoingRefs(text: string): Ref[] {
   return out
 }
 
+/**
+ * 一条引用最后指向哪一篇。解析不到返回 null（那篇可能还没建）。
+ *
+ * `from` 是"从哪一篇出发" —— 有了它，`../开始这里.md` 和 `开始这里.md`
+ * 才会被认成同一篇。少了它，子目录里的反向链接会整片消失（这个坑踩过）。
+ */
+export function refTarget(files: FileMap, ref: Ref, from?: string): string | null {
+  return ref.kind === 'wiki'
+    ? resolveWiki(files, ref.value)
+    : resolvePath(files, ref.value, from)
+}
+
 /** 这条引用是不是指向 target */
-export function refHits(files: FileMap, ref: Ref, target: string): boolean {
+export function refHits(files: FileMap, ref: Ref, target: string, from?: string): boolean {
   // `.note` 是目录即文档：按路径或目录名都算
   if (target.toLowerCase().endsWith('.note')) {
     const norm = ref.value.replace(/^\.\//, '')
@@ -69,6 +81,11 @@ export function refHits(files: FileMap, ref: Ref, target: string): boolean {
     return norm === target || norm === `${target}.md` || norm === stem || (ref.kind === 'wiki' && ref.value === stem)
   }
 
+  // 先按真解析比：这一步才认 `../`、`./`、`/a/b.md` 和省略后缀
+  const hit = refTarget(files, ref, from)
+  if (hit) return hit === target
+
+  // 解析不到时退回字面比对（那篇还没建，但还是要知道它想指谁）
   if (ref.kind === 'wiki') {
     const known = new Set([stemOf(target), titleOf(files, target)])
     return known.has(ref.value)
@@ -123,7 +140,8 @@ export function backlinksOf(files: FileMap, target: string): Backlink[] {
 
   for (const [p, text] of Object.entries(files)) {
     if (p === target) continue
-    const hit = outgoingRefs(text).find((r) => refHits(files, r, target))
+    // 出发路径必须传：不然 `../这篇.md` 一律认不出来
+    const hit = outgoingRefs(text).find((r) => refHits(files, r, target, p))
     if (!hit) continue
     const needle = hit.kind === 'wiki' ? `[[${hit.value}` : `](${hit.value}`
     const line = text.split('\n').find((l) => l.includes(needle)) ?? ''
@@ -131,6 +149,28 @@ export function backlinksOf(files: FileMap, target: string): Backlink[] {
   }
 
   return out.sort((a, b) => a.path.localeCompare(b.path, 'zh'))
+}
+
+/** 这一篇指向谁（出链）。解析不到的那条 target 是 null，界面标成"还没建" */
+export type OutLink = {
+  /** 文里原样的写法 */
+  href: string
+  /** 落到哪一篇；null = 库里没有 */
+  target: string | null
+}
+
+export function outgoingLinksOf(files: FileMap, path: string): OutLink[] {
+  const out: OutLink[] = []
+  const seen = new Set<string>()
+
+  for (const r of outgoingRefs(files[path] ?? '')) {
+    const key = `${r.kind}\u0000${r.value}`
+    if (seen.has(key)) continue // 同一篇里引用两次只列一条
+    seen.add(key)
+    out.push({ href: r.value, target: refTarget(files, r, path) })
+  }
+
+  return out
 }
 
 /** 这一篇指向了、但库里还没有的篇名 */
@@ -163,8 +203,9 @@ export function resolveWiki(files: FileMap, target: string): string | null {
   if (!name) return null
 
   const asPath = name.replace(/\\/g, '/')
-  if (files[asPath]) return asPath
-  if (files[`${asPath}.md`]) return `${asPath}.md`
+  // 用 hasOwn 而不是取真值：空笔记（0 字节）的内容是 ""，会被当成不存在
+  if (Object.hasOwn(files, asPath)) return asPath
+  if (Object.hasOwn(files, `${asPath}.md`)) return `${asPath}.md`
 
   for (const p of Object.keys(files)) {
     if (stemOf(p) === name || titleOf(files, p) === name) return p

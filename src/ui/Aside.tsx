@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { FileMap } from '../core/model/library'
-import { backlinksOf, pendingLinksOf } from '../core/markdown/links'
+import { backlinksOf, outgoingLinksOf, pendingLinksOf } from '../core/markdown/links'
 import { outlineOf } from '../core/markdown/parse'
 import { IconFile, IconLink, IconPanelClose, IconPlus } from './icons'
 
@@ -33,6 +33,7 @@ export function Aside({ files, path, noteOutline, onClose, onOpen, width, resize
   const outline = noteOutline ?? outlineOf(text)
   const backlinks = backlinksOf(files, path)
   const pending = pendingLinksOf(files, path)
+  const outgoing = outgoingLinksOf(files, path)
 
   return (
     <aside
@@ -91,7 +92,44 @@ export function Aside({ files, path, noteOutline, onClose, onOpen, width, resize
             </ul>
           )
         ) : (
-          <div className="space-y-5 px-1 py-1">
+          <div className="space-y-5 px-1 py-1" data-dd-relations>
+            <section data-dd-outgoing>
+              <h3 className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium tracking-wide text-ink-3">
+                <IconLink className="size-3.5" />
+                这篇指向的
+                <span className="ml-auto tabular-nums">{outgoing.length}</span>
+              </h3>
+              {outgoing.length === 0 ? (
+                <p className="px-2 py-1 text-[11.5px] text-ink-3">这篇没有指向别的篇。</p>
+              ) : (
+                <ul className="space-y-0.5">
+                  {outgoing.map((r) => (
+                    <li key={r.href}>
+                      {r.target ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpen(r.target as string)}
+                          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12.5px] text-ink transition-colors hover:bg-surface-2"
+                          title={r.target}
+                        >
+                          <IconFile className="size-3.5 shrink-0 text-ink-3" />
+                          <span className="truncate">{r.target}</span>
+                        </button>
+                      ) : (
+                        <span
+                          className="flex items-center gap-1.5 px-2 py-1 text-[12.5px] text-ink-3"
+                          title={r.href}
+                        >
+                          <span className="size-1.5 shrink-0 rounded-full border border-dashed border-ink-3" />
+                          <span className="truncate">{r.href}</span>
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
             <section>
               <h3 className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium tracking-wide text-ink-3">
                 <IconLink className="size-3.5" />

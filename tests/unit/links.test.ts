@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   backlinksOf,
+  outgoingLinksOf,
   outgoingRefs,
   pendingLinksOf,
   refHits,
@@ -132,5 +133,50 @@ describe('相对路径（../ 与绝对写法）', () => {
   it('往上跳过头就是解析不到，不瞎猜', () => {
     expect(resolvePath(files, '../../../开始这里.md', '项目/周计划.md')).toBe('开始这里.md')
     expect(resolvePath(files, '../不存在.md', '项目/周计划.md')).toBeNull()
+  })
+})
+
+describe('反链与出链', () => {
+  const files = {
+    '开始这里.md': '# 开始\n\n- [语法示例](语法示例.md)\n- [周计划](项目/周计划.md)\n- [日记](日记/2026-10-29.md)\n',
+    '语法示例.md': '# 语法\n\n回到 [开始这里](开始这里.md)。\n',
+    '项目/周计划.md': '# 周计划\n\n回到 [开始这里](../开始这里.md)。\n',
+    '日记/2026-10-29.md': '# 日记\n\n回到 [开始这里](../开始这里.md)。\n',
+    '孤立.md': '# 谁都不引用\n',
+  }
+
+  it('子目录里的 ../ 也算反链（这条曾经整片丢失）', () => {
+    const hits = backlinksOf(files, '开始这里.md').map((b) => b.path)
+    // 顺序按中文拼音排（ri < xiang < yu），不是文件出现顺序
+    expect(hits).toEqual(['日记/2026-10-29.md', '项目/周计划.md', '语法示例.md'])
+  })
+
+  it('反链给出来源篇和那一行原文', () => {
+    const hit = backlinksOf(files, '开始这里.md').find((b) => b.path === '项目/周计划.md')
+    expect(hit?.quote).toContain('../开始这里.md')
+  })
+
+  it('没人引用就是空，不硬凑', () => {
+    expect(backlinksOf(files, '孤立.md')).toEqual([])
+  })
+
+  it('出链列出这篇指向的所有篇，解析不到的是 null', () => {
+    const out = outgoingLinksOf(files, '开始这里.md')
+    expect(out.map((r) => r.target)).toEqual([
+      '语法示例.md',
+      '项目/周计划.md',
+      '日记/2026-10-29.md',
+    ])
+    expect(out.every((r) => r.target !== null)).toBe(true)
+  })
+
+  it('出链里悬空的那条保留原文、target 为 null', () => {
+    const out = outgoingLinksOf({ 'a.md': '[还没写](草稿/未建.md)\n' }, 'a.md')
+    expect(out).toEqual([{ href: '草稿/未建.md', target: null }])
+  })
+
+  it('同一篇里引用两次只列一条', () => {
+    const out = outgoingLinksOf({ 'a.md': '[x](b.md)\n\n再来一次 [x](b.md)\n', 'b.md': '' }, 'a.md')
+    expect(out).toHaveLength(1)
   })
 })
