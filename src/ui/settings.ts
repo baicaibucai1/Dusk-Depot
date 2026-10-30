@@ -18,6 +18,12 @@ export type Settings = {
   font: 'sans' | 'serif' | 'custom'
   /** font = 'custom' 时用它，形如 `'LXGW WenKai', serif` */
   fontCustom: string
+  /**
+   * 编辑辅助：
+   *   hints = 智能提示（行内公式浮出符号条、`[[` 弹引用选择）
+   *   plain = 纯文本 md（什么提示都不弹，就当记事本用）
+   */
+  assist: 'hints' | 'plain'
 }
 
 export const DEFAULTS: Settings = {
@@ -26,6 +32,7 @@ export const DEFAULTS: Settings = {
   paraGap: 1,
   width: 46,
   font: 'sans',
+  assist: 'hints',
   fontCustom: '',
 }
 
@@ -43,6 +50,7 @@ export function loadSettings(): Settings {
       width: clamp(v.width, 34, 62, DEFAULTS.width),
       font: v.font === 'serif' || v.font === 'custom' ? v.font : 'sans',
       fontCustom: typeof v.fontCustom === 'string' ? safeFont(v.fontCustom) : '',
+      assist: v.assist === 'plain' ? 'plain' : 'hints',
     }
   } catch {
     return { ...DEFAULTS }

@@ -301,7 +301,7 @@ class Check extends WidgetType {
       e.preventDefault()
       e.stopPropagation()
     })
-    el.addEventListener('click', (e) => {
+    el.addEventListener('dblclick', (e) => {
       e.preventDefault()
       e.stopPropagation()
       const view = EditorView.findFromDOM(el)
