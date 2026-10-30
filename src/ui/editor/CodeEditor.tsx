@@ -103,16 +103,22 @@ const theme = EditorView.theme(
     '.dd-check svg': { display: 'block', width: '9px', height: '9px', margin: '1px' },
     '.dd-strike': { textDecoration: 'line-through', color: 'var(--color-ink-3)' },
     // 块 widget 会继承正文行高（1.85），表格这类按字号算高度的元素会因此变高
-    '.dd-block': { margin: '0', lineHeight: '1.5' },
-    // 渲染层给块留了 my-5（阅读时好看），编辑器里太松，收一收
     /*
-     * ⚠️ 这里必须用 padding，不能用 margin。
-     *    margin 会在 `.dd-block` 盒子外面，而 CM 量 widget 高度用的是盒子本身 ——
-     *    于是"视觉上有 20px 间距、CM 认为没有"，每个块组件都让后面的行错位一点，
-     *    文档里几个表格/公式叠起来就偏出去两行：点第 47 行，光标落到第 49 行。
-     *    padding 在盒子里面，量多高就是多高，行高表才不会歪。
+     * ⚠️ 块组件的间距只用 padding，且必须挂在 `.dd-block` 自己身上。
+     *
+     *    CM 量 widget 高度量的是 `.dd-block` 这个盒子（border box，含 padding）。
+     *    任何落在它外面的 margin 都是"视觉上有、CM 认为没有"，于是块下面的每一行
+     *    都往下错一点，文档里几个块叠起来就能偏出好几行 ——
+     *    点第 47 行、光标落到第 49 行，就是这么来的。
+     *
+     *    统一两条规矩，新增块类型时别再破：
+     *      1. `.dd-block` 自己不给 margin，间距全用 padding；
+     *      2. 直接子元素（div / hr / table 包装……）的垂直 margin 一律清零。
+     *    第 2 条不能用 `.dd-block > div` —— 分割线是 `<hr class="my-8">`，
+     *    不是 div，之前就漏在规则外面，一次漏 64px。
      */
-    '.dd-block > div': { margin: '0', padding: '10px 0' },
+    '.dd-block': { margin: '0', padding: '10px 0', lineHeight: '1.5' },
+    '.dd-block > *': { marginTop: '0', marginBottom: '0' },
     '.dd-block .katex-display': { margin: '0' },
     '.dd-fence-label': {
       display: 'inline-block',
@@ -741,11 +747,30 @@ function decorateLine(
 /** 图片是异步读进来的：读完之后要让编辑器重算一次装饰，否则 widget 永远停在占位 */
 const refreshDecos = StateEffect.define<null>()
 
+/**
+ * 解析结果按文档缓存。
+ *
+ * 光标一动装饰就得重建（要判断"当前这行露不露源码"），但**文档没变时解析结果必然相同**。
+ * 长文档里每按一次方向键都把整篇 markdown 重新解析一遍，是白花的 10–20ms。
+ *
+ * 用 WeakMap 以 Text 实例作键：CM 的 Text 是不可变的，文档一改就是新对象，
+ * 旧键跟着对象一起被回收，不会越积越多。
+ */
+const parseCache = new WeakMap<Text, ReturnType<typeof parseMarkdown>>()
+
+function blocksOf(doc: Text) {
+  const hit = parseCache.get(doc)
+  if (hit) return hit
+  const blocks = parseMarkdown(doc.toString())
+  parseCache.set(doc, blocks)
+  return blocks
+}
+
 function buildDecos(state: EditorState, live: boolean): DecorationSet {
   if (!live) return Decoration.none
 
   const doc = state.doc
-  const blocks = parseMarkdown(doc.toString())
+  const blocks = blocksOf(doc)
   const out: Range<Decoration>[] = []
 
   const head = state.selection.main.head
