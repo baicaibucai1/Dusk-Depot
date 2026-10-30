@@ -5,6 +5,7 @@ import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
 import { kindOf, previewOf } from './core/model/fileKind'
 import { isNoteDocPath } from './core/note/format'
+import { emptyFlowDoc, flowDocFiles } from './core/note/flowDoc'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
 import { parentOf, stemOf } from './core/model/path'
 import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/rename'
@@ -152,6 +153,51 @@ async function readRepo(
     hasMark: entries.some((e) => e.path === VAULT_MARK),
     notes: noteRoots,
     assets,
+  }
+}
+
+/**
+ * 把一个 `.note` 目录整体改名。
+ * 宿主没有原子换名（浏览器那条路就没有）时，退化成"逐文件复制 + 删旧的"。
+ * `.note` 目录只有一层块文件，没有更深的子树，所以这样搬是安全的。
+ */
+async function moveNoteDir(host: Host, from: string, to: string, title?: string): Promise<boolean> {
+  try {
+    if (host.move) {
+      await host.move(from, to)
+    } else {
+      const entries = await host.list()
+      await host.mkdir(to)
+      await host.mkdir(`${to}/blocks`)
+      for (const e of entries) {
+        if (e.kind !== 'file' || !e.path.startsWith(`${from}/`)) continue
+        await host.write(`${to}${e.path.slice(from.length)}`, await host.read(e.path))
+        await host.remove(e.path)
+      }
+      await host.rmdir(`${from}/blocks`).catch(() => {})
+      await host.rmdir(from).catch(() => {})
+    }
+
+    /*
+     * 目录名和文档标题是两回事：树里改名之后，标题也得跟着改，
+     * 否则打开来还是"未命名"，用户会以为没改成。
+     * 只动 meta.json，块文件一个都不碰。
+     */
+    if (title) {
+      const metaPath = `${to}/meta.json`
+      try {
+        const raw = decodeBytes(await host.read(metaPath))
+        const meta = JSON.parse(raw) as Record<string, unknown>
+        meta.title = title
+        await host.write(metaPath, encodeText(`${JSON.stringify(meta, null, 2)}\n`))
+      } catch {
+        /* 元数据改不了不影响正文 */
+      }
+    }
+    return true
+  } catch (e) {
+    console.warn('[dusk] 块笔记改名失败', from, '→', to, e)
+    return false
   }
 }
 
@@ -758,7 +804,7 @@ export function App() {
     setFiles((prev) => ({ ...prev, [path]: text }))
   }
 
-  const taken = (p: string) => p in files || dirs.includes(p) || assets.includes(p)
+  const taken = (p: string) => p in files || dirs.includes(p) || assets.includes(p) || noteDocs.includes(p)
 
   function createNote(dir: string): string | null {
     const path = uniquePath(notePath(dir, '未命名'), taken)
@@ -766,6 +812,42 @@ export function App() {
     if (dir) setExpanded((prev) => new Set(prev).add(dir))
     // 注意走 openNote：新建的笔记也要有一个标签页，否则编辑器开着它、标签条上却没有
     openNote(path)
+    return path
+  }
+
+  /**
+   * 新建一篇**文档流** `.note`（v2）。
+   *
+   * 直接写盘，不走 files 内存表：`.note` 是一个目录，里面的块文件不该出现在文件树里
+   * （树里它只作为一篇文档出现）。写失败就什么都不加，别留半个文档。
+   */
+  function createNoteDoc(dir: string): string | null {
+    if (phase.t !== 'ready') return null
+    const host = phase.host
+    const base = dir ? `${dir}/` : ''
+    const path = uniquePath(`${base}未命名.note`, taken)
+    const doc = emptyFlowDoc('未命名')
+    const files = flowDocFiles(path, doc)
+
+    /*
+     * ⚠️ 先把文件真的写下去，**再**打开。
+     * 反过来的话，编辑器会在目录还空着的时候去解析，直接报"缺标记文件"。
+     * 写失败就把这篇从树里撤掉，别留一个打不开的文档。
+     */
+    void (async () => {
+      try {
+        await host.mkdir(path)
+        await host.mkdir(`${path}/blocks`)
+        for (const [p, text] of Object.entries(files)) await host.write(p, encodeText(text))
+        setNoteDocs((prev) => (prev.includes(path) ? prev : [...prev, path]))
+        if (dir) setExpanded((prev) => new Set(prev).add(dir))
+        openNote(path)
+      } catch (e) {
+        console.warn('[dusk] 新建块笔记失败', e)
+        setNoteDocs((prev) => prev.filter((p) => p !== path))
+      }
+    })()
+
     return path
   }
 
@@ -828,9 +910,69 @@ export function App() {
   }
 
   function doRename(path: string, name: string): string | null {
+    // `.note` 是一整个目录，改的是目录名 —— 不走文件表那条路。
+    // 判断用后缀而不是 noteDocs：新建的文档在 setNoteDocs 生效前就可能被改名。
+    if (noteDocs.includes(path) || path.toLowerCase().endsWith('.note')) {
+      return renameNoteDoc(path, name)
+    }
     const r = renameEntry(files, dirs, path, name)
     if (!r.ok) return r.error
     apply(r)
+    return null
+  }
+
+  /**
+   * 改一篇块笔记的名字。
+   *
+   * 顺序很重要：先在内存里换掉路径（树/标签/置顶立刻对），再让宿主搬目录。
+   * 搬失败只留一条警告 —— 用户看到的界面不会因此回到旧名字，磁盘上的旧目录也还在，
+   * 数据不会丢；下次打开仓库会如实反映磁盘状态。
+   */
+  function renameNoteDoc(path: string, rawName: string): string | null {
+    const clean = sanitizeName(rawName).replace(/\.note$/i, '')
+    if (!clean) return '名字不能为空'
+
+    const parent = parentOf(path)
+    const to = `${parent ? `${parent}/` : ''}${clean}.note`
+    if (to === path) return null
+    if (noteDocs.includes(to) || dirs.includes(to) || to in files) {
+      return `「${clean}」已经存在了`
+    }
+
+    /*
+     * 顺序：**先把目录搬完，再换界面上的路径**。
+     * 反过来的话，编辑器会立刻去读新路径、而文件还没搬过去 —— 打开就是"缺标记文件"。
+     * 搬失败就什么都不改（树里还是旧名字，磁盘上也还是旧目录）。
+     */
+    const commit = () => {
+      const map = (p: string) => (p === path ? to : p)
+      // 新建后立刻改名时，noteDocs 里可能还没有它 —— 直接补上，别把这篇丢了
+      setNoteDocs((prev) => (prev.includes(path) ? prev.map(map) : [...prev, to]))
+      setPanes((prev) =>
+        prev.map((pane) => ({
+          ...pane,
+          tabs: pane.tabs.map(map),
+          active: pane.active ? map(pane.active) : null,
+        })),
+      )
+
+      if (pins.includes(path)) {
+        const nextPins = pins.map(map)
+        setPins(nextPins)
+        const meta = parseVault(vaultRaw.current)
+        const filesMeta: Record<string, FileMeta> = {}
+        for (const [p, v] of Object.entries(meta.files)) filesMeta[map(p)] = v
+        void writeVaultMeta({ pins: nextPins, files: filesMeta })
+      }
+    }
+
+    if (phase.t === 'ready') {
+      void moveNoteDir(phase.host, path, to, clean).then((ok) => {
+        if (ok) commit()
+      })
+    } else {
+      commit()
+    }
     return null
   }
 
@@ -935,6 +1077,7 @@ export function App() {
             onOpenTab={openInNewTab}
             onOpenSplit={openInSplit}
             onNewNote={createNote}
+            onNewNoteDoc={createNoteDoc}
             onNewFolder={createFolder}
             onRename={doRename}
             onMove={doMove}

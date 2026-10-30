@@ -733,3 +733,642 @@
 .dd-pdf-text ::selection {
   background: rgba(14, 155, 102, 0.25);
 }
+
+/* ═══════════════════════════════════════════════════════════
+ * 文档流（`.note` v2）—— Notion 式块编辑器的排版
+ *
+ * 只做"文档本身"的排版；手柄 / 菜单 / 浮动条是浮层，样式在下面各自一块。
+ * 宽度、字号、行距全部读 --dd-cw / --dd-fs / --dd-lh，跟 markdown 那边同一套。
+ * ═══════════════════════════════════════════════════════════ */
+:root {
+  /* 左侧留白：块手柄站在这儿，不压正文、不推正文对齐线 */
+  --dd-gutter: 44px;
+}
+
+.dd-flow {
+  position: relative;
+  padding: 0 10px 24px var(--dd-gutter);
+  font-size: var(--dd-fs);
+  line-height: var(--dd-lh);
+  font-family: var(--dd-font);
+  color: var(--color-ink);
+  outline: none;
+  word-break: break-word;
+}
+
+.dd-flow > * {
+  position: relative;
+}
+
+.dd-flow > :first-child {
+  margin-top: 0;
+}
+
+.dd-flow p {
+  margin: 0.2em 0;
+}
+
+.dd-flow h1,
+.dd-flow h2 {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.32;
+  margin: 1.1em 0 0.25em;
+}
+
+.dd-flow h1 {
+  font-size: 1.62em;
+}
+
+.dd-flow h2 {
+  font-size: 1.26em;
+}
+
+.dd-flow ul,
+.dd-flow ol {
+  margin: 0.2em 0;
+  padding-left: 1.45em;
+}
+
+.dd-flow ul {
+  list-style: disc;
+}
+
+.dd-flow ul ul {
+  list-style: circle;
+}
+
+.dd-flow ol {
+  list-style: decimal;
+}
+
+.dd-flow li {
+  margin: 0.08em 0;
+}
+
+.dd-flow li > p {
+  margin: 0.06em 0;
+}
+
+.dd-flow li::marker {
+  color: var(--color-ink-3);
+}
+
+/* 待办：方框在左，勾掉的一行变灰划掉（Notion 的老习惯） */
+.dd-flow ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.15em;
+}
+
+.dd-flow ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+
+.dd-flow ul[data-type='taskList'] li > label {
+  margin-top: 0.32em;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.dd-flow ul[data-type='taskList'] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.dd-flow ul[data-type='taskList'] input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-green);
+  cursor: pointer;
+}
+
+.dd-flow ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--color-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-ink-3);
+}
+
+.dd-flow blockquote {
+  margin: 0.5em 0;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 3px solid #d5e6dd;
+  color: var(--color-ink-2);
+}
+
+.dd-flow blockquote p {
+  margin: 0.15em 0;
+}
+
+.dd-flow pre {
+  margin: 0.55em 0;
+  padding: 0.75em 0.95em;
+  background: var(--color-surface-2);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  line-height: 1.65;
+  overflow-x: auto;
+}
+
+.dd-flow pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: var(--color-ink);
+}
+
+.dd-flow code {
+  background: var(--color-surface-2);
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.dd-flow hr {
+  margin: 1.3em 0;
+  border: 0;
+  border-top: 1px solid var(--color-line);
+}
+
+.dd-flow a {
+  color: var(--color-green-deep);
+  text-decoration-color: color-mix(in srgb, var(--color-green) 40%, transparent);
+}
+
+.dd-flow a:hover {
+  text-decoration-color: var(--color-green);
+}
+
+.dd-flow strong {
+  font-weight: 650;
+}
+
+/* 空块的提示字：只在当前块上出现，别整页都是灰字 */
+.dd-flow p.is-empty:first-child::before,
+.dd-flow p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--color-ink-3);
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.dd-flow .ProseMirror-selectednode {
+  outline: none;
+}
+
+/* ── 标题与状态条 ── */
+.dd-flow-title {
+  display: block;
+  width: 100%;
+  padding: 0 10px 0 var(--dd-gutter);
+  border: 0;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 1.92em;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.24;
+  color: var(--color-ink);
+  outline: none;
+}
+
+.dd-flow-title::placeholder {
+  color: color-mix(in srgb, var(--color-ink-3) 45%, transparent);
+}
+
+.dd-flow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 7px var(--dd-gutter);
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+}
+
+.dd-flow-badge {
+  border-radius: 999px;
+  background: var(--color-green-soft);
+  color: var(--color-green);
+  padding: 1px 8px;
+  letter-spacing: 0.02em;
+}
+
+.dd-flow-status[data-status='error'] {
+  color: #b3261e;
+}
+
+.dd-flow-retry {
+  text-decoration: underline;
+  color: #b3261e;
+}
+
+.dd-flow-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.dd-flow-error {
+  margin: 12px 0 0 var(--dd-gutter);
+  font-size: 11.5px;
+  color: #b3261e;
+}
+
+/* ── 图片块 ── */
+.dd-flow-image {
+  margin: 0.55em 0;
+}
+
+.dd-flow-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.dd-flow-image.is-selected img {
+  outline: 2px solid var(--color-green);
+  outline-offset: 3px;
+}
+
+.dd-flow-image-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  border: 1px dashed var(--color-line);
+  border-radius: 10px;
+  color: var(--color-ink-3);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.dd-flow-image.is-over .dd-flow-image-empty,
+.dd-flow-image-empty:hover {
+  border-color: color-mix(in srgb, var(--color-green) 45%, var(--color-line));
+  color: var(--color-green);
+}
+
+.dd-flow-image-glyph {
+  font-size: 15px;
+}
+
+/* ── 分栏块 ── */
+.dd-flow-columns-wrap {
+  margin: 0.65em 0;
+}
+
+.dd-flow-columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.dd-flow-column {
+  min-width: 0;
+  position: relative;
+}
+
+.dd-flow-column-body {
+  min-height: 1.9em;
+}
+
+.dd-flow-column-body p {
+  margin: 0.12em 0;
+}
+
+.dd-flow-column-resize {
+  position: absolute;
+  top: 0;
+  right: -7px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.dd-flow-columns-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.dd-flow-columns-wrap:hover .dd-flow-columns-bar,
+.dd-flow-columns-wrap:focus-within .dd-flow-columns-bar {
+  opacity: 1;
+}
+
+.dd-flow-mini {
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--color-ink-3);
+}
+
+.dd-flow-mini:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+}
+
+/* ── 块手柄（浮在左侧留白里） ── */
+.dd-block-tools {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dd-block-btn {
+  width: 24px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--color-ink-3);
+  font-size: 13px;
+  line-height: 1;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.dd-block-btn:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+}
+
+.dd-block-btn.is-grip {
+  cursor: grab;
+  letter-spacing: 0;
+}
+
+.dd-block-btn.is-grip:active {
+  cursor: grabbing;
+}
+
+.dd-drop-line {
+  position: fixed;
+  z-index: 30;
+  height: 2px;
+  background: var(--color-green);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.dd-drag-ghost {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  font-size: 11px;
+  color: var(--color-ink-2);
+}
+
+/* ── 浮层：斜杠菜单 / 块菜单 ── */
+.dd-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  box-shadow:
+    0 12px 32px rgba(16, 35, 28, 0.12),
+    0 2px 6px rgba(16, 35, 28, 0.06);
+  overflow: hidden;
+}
+
+.dd-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-surface-2) 55%, var(--color-surface));
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+}
+
+.dd-pop-hint {
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.dd-slash-list,
+.dd-menu-list {
+  /* flex 子项必须允许收缩，否则内容会把浮层顶出 max-height、被 overflow 裁掉 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+}
+
+.dd-slash-item,
+.dd-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--color-ink-2);
+  text-align: left;
+}
+
+.dd-slash-item[data-active='true'],
+.dd-menu-item[data-active='true'] {
+  background: var(--color-green-soft);
+  color: var(--color-green-deep);
+}
+
+.dd-slash-glyph {
+  width: 20px;
+  flex: none;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-ink-3);
+}
+
+.dd-slash-item[data-active='true'] .dd-slash-glyph {
+  color: var(--color-green);
+}
+
+.dd-slash-group,
+.dd-menu-group {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--color-ink-3);
+}
+
+.dd-slash-empty {
+  padding: 14px 10px;
+  font-size: 12px;
+  color: var(--color-ink-3);
+}
+
+.dd-menu-item.is-danger {
+  color: #b3261e;
+}
+
+.dd-menu-item.is-danger[data-active='true'] {
+  background: #fdeceb;
+}
+
+/* ── 选区浮动工具条 ── */
+.dd-bubble {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  box-shadow:
+    0 10px 26px rgba(16, 35, 28, 0.13),
+    0 1px 4px rgba(16, 35, 28, 0.06);
+}
+
+.dd-bubble-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.dd-bubble-btn {
+  min-width: 30px;
+  height: 26px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--color-ink-2);
+}
+
+.dd-bubble-btn:hover {
+  background: var(--color-surface-2);
+}
+
+.dd-bubble-btn[aria-pressed='true'] {
+  background: var(--color-green-soft);
+  color: var(--color-green);
+}
+
+.dd-bubble-btn.is-bold {
+  font-weight: 700;
+}
+
+.dd-bubble-btn.is-italic {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.dd-bubble-btn.is-strike {
+  text-decoration: line-through;
+}
+
+.dd-bubble-btn.is-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.dd-bubble-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--color-line);
+}
+
+.dd-bubble-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px;
+}
+
+.dd-bubble-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--color-ink);
+  outline: none;
+}
+
+.dd-bubble-input:focus {
+  border-color: color-mix(in srgb, var(--color-green) 55%, var(--color-line));
+}
+
+.dd-bubble-act {
+  flex: none;
+  padding: 5px 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--color-ink-2);
+}
+
+.dd-bubble-act:hover {
+  background: var(--color-surface-2);
+}
+
+/* 未识别的块：一条安静的灰条，不假装自己是正文 */
+.dd-flow-unknown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.5em 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-2) 60%, transparent);
+  font-size: 12px;
+  color: var(--color-ink-3);
+}
+
+.dd-flow-unknown-badge {
+  border-radius: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+
+.dd-flow-unknown-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-ink-2);
+}
+
+.dd-flow-unknown-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  opacity: 0.8;
+}
+
+/* 浮层靠 focus() 接键盘事件，但不要画那圈系统焦点框 */
+.dd-pop:focus,
+.dd-pop:focus-visible {
+  outline: none;
+}

@@ -27,6 +27,8 @@ type Props = {
 
   /** 在某个目录里新建。返回新路径或 null */
   onNewNote: (dir: string) => string | null
+  /** 新建一篇文档流富文本笔记（`.note` v2）。返回新路径或 null */
+  onNewNoteDoc: (dir: string) => string | null
   onNewFolder: (dir: string) => string | null
   /** 改名。返回错误消息；成功返回 null */
   onRename: (path: string, name: string) => string | null
@@ -94,6 +96,7 @@ export function TreePanel({
   onOpenTab,
   onOpenSplit,
   onNewNote,
+  onNewNoteDoc,
   onNewFolder,
   onRename,
   onMove,
@@ -152,15 +155,19 @@ export function TreePanel({
     fail(onRename(old, value))
   }
 
-  function startCreate(dir: string, kind: 'note' | 'folder') {
+  function startCreate(dir: string, kind: 'note' | 'noteDoc' | 'folder') {
     // 新建是"一键建、零输入"，名字进来再改
-    const made = kind === 'note' ? onNewNote(dir) : onNewFolder(dir)
+    const made =
+      kind === 'note' ? onNewNote(dir) : kind === 'noteDoc' ? onNewNoteDoc(dir) : onNewFolder(dir)
     if (!made) {
-      setErr('新建失败')
+      setErr(kind === 'noteDoc' ? '新建块笔记失败' : '新建失败')
       return
     }
     const name = made.slice(made.lastIndexOf('/') + 1)
-    setRename({ path: made, value: kind === 'note' ? name.replace(/\.md$/, '') : name })
+    setRename({
+      path: made,
+      value: kind === 'folder' ? name : name.replace(/\.(md|note)$/i, ''),
+    })
   }
 
   function menuFor(path: string | null): MenuItem[] {
@@ -169,6 +176,7 @@ export function TreePanel({
 
     const items: MenuItem[] = [
       { label: '新建笔记', onSelect: () => startCreate(dir, 'note') },
+      { label: '新建块笔记（富文本）', onSelect: () => startCreate(dir, 'noteDoc') },
       { label: '新建文件夹', onSelect: () => startCreate(dir, 'folder') },
     ]
 
@@ -180,8 +188,8 @@ export function TreePanel({
           { label: '在右侧分栏打开', onSelect: () => onOpenSplit(path) },
         )
       }
-      // 改名走的是"文本文件按差异重写"那条路，图片/PDF 不在其中 —— 不给这个入口
-      const canRename = isDir || isNote(path)
+      // 改名走的是"文本文件按差异重写"那条路；图片/PDF 不在其中 —— 不给这个入口
+      const canRename = isDir || isNote(path) || path.toLowerCase().endsWith('.note')
       items.push(
         { label: '', onSelect: () => {}, divider: true },
         ...(canRename
@@ -237,6 +245,8 @@ export function TreePanel({
       const label = editing ? (
         <input
           ref={input}
+          autoFocus
+          onFocus={(e) => e.currentTarget.select()}
           value={rename?.value ?? ''}
           onChange={(e) => setRename({ path: n.path, value: e.target.value })}
           onBlur={commitRename}

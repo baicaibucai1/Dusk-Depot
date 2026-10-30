@@ -91,7 +91,10 @@ export const BlockImage = Image.extend({
 
 /**
  * 保证每个顶层节点都有唯一 id。
- * 没有 id 的节点进不了 `.note` 的块文件，所以这里兜底补上，别指望调用方记得。
+ *
+ * 缺 id 要补，**id 撞车也要换** —— ProseMirror 拆块时会把 attrs 复制给新节点，
+ * 两块共用一个 id 就会写进同一个块文件，前一块的内容直接没掉。
+ * 老格式（画布）也有这条风险，所以修复放在这里而不是只放文档流那边。
  */
 export const BlockIds = Extension.create({
   name: 'blockIds',
@@ -102,31 +105,32 @@ export const BlockIds = Extension.create({
         key,
         appendTransaction: (_trs, _old, state) => {
           const used = new Set<string>()
+          const need: number[] = []
           let max = 0
-          let missing = 0
 
-          state.doc.forEach((node) => {
+          state.doc.forEach((node, offset) => {
             const id = String(node.attrs.id ?? '')
             if (id) {
-              used.add(id)
               const m = /^b(\d+)$/.exec(id)
               if (m) max = Math.max(max, Number(m[1]))
-            } else {
-              missing += 1
             }
+            if (!id || used.has(id)) {
+              need.push(offset)
+              return
+            }
+            used.add(id)
           })
 
-          if (missing === 0) return null
+          if (need.length === 0) return null
 
           const tr = state.tr
-          state.doc.forEach((node, offset) => {
-            if (node.attrs.id) return
+          for (const offset of need) {
             let next = max + 1
             while (used.has(`b${next}`)) next += 1
             max = next
             used.add(`b${next}`)
             tr.setNodeAttribute(offset, 'id', `b${next}`)
-          })
+          }
           return tr
         },
       }),

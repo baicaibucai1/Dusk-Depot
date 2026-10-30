@@ -362,7 +362,7 @@ export function DocPane({
 
       {noteDir ? (
         <Suspense fallback={null}>
-          <NoteEditor host={host} dir={noteDir} onInfo={onNoteInfo} />
+          <NoteEditor host={host} dir={noteDir} onInfo={onNoteInfo} onJump={onJump} notes={notes} />
         </Suspense>
       ) : null}
 

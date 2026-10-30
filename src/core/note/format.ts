@@ -133,6 +133,61 @@ export function isNoteDocPath(path: Path): boolean {
   return path.toLowerCase().endsWith(NOTE_SUFFIX)
 }
 
+/**
+ * 这份 `.note` 是哪一版、什么布局。
+ *
+ * 只有 v1（没写 version / version: 1）和 v2（version: 2 + layoutMode: "flow"）两种。
+ * **不认识的新版本不猜**：`version > 2` 时 layoutMode 走标记里写的那个，
+ * 没写就当 flow（宁可当成新版打开，也不要拿 v1 的画布去覆盖它）。
+ */
+export type NoteLayoutMode = 'canvas' | 'flow'
+export type NoteMarker = { version: number; layoutMode: NoteLayoutMode }
+
+export function readNoteMarker(dir: Path, files: Record<Path, string>): NoteMarker | null {
+  const base = dir.endsWith('/') ? dir.slice(0, -1) : dir
+  const raw = files[`${base}/${NOTE_MARK}`]
+  if (!raw) return null
+
+  try {
+    const m = JSON.parse(raw) as { version?: unknown; layoutMode?: unknown }
+    const version = typeof m.version === 'number' ? m.version : 1
+    const mode =
+      m.layoutMode === 'flow' || m.layoutMode === 'canvas'
+        ? m.layoutMode
+        : version >= 2
+          ? 'flow'
+          : 'canvas'
+    return { version, layoutMode: mode }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 标记坏了（或压根没有 version）时的兜底判断。
+ *
+ * 不靠猜后缀里的日期，只看块文件的形状：有 `content` / `items` 数组的就是 v2。
+ * 这条兜底的唯一目的是**别把 v2 的块当 v1 解析成空正文再保存回去**——那是真丢数据。
+ */
+export function inferNoteMarker(dir: Path, files: Record<Path, string>): NoteMarker {
+  const base = dir.endsWith('/') ? dir.slice(0, -1) : dir
+  const prefix = `${base}/${NOTE_BLOCKS}/`
+  for (const [path, text] of Object.entries(files)) {
+    if (!path.startsWith(prefix) || !path.endsWith('.json')) continue
+    try {
+      const b = JSON.parse(text) as { type?: unknown; content?: unknown; items?: unknown; text?: unknown }
+      if (Array.isArray(b.content) || Array.isArray(b.items)) return { version: 2, layoutMode: 'flow' }
+      if (b.type === 'divider' || b.type === 'bulletList' || b.type === 'todoList') {
+        return { version: 2, layoutMode: 'flow' }
+      }
+      if (typeof b.text === 'string') return { version: 1, layoutMode: 'canvas' }
+    } catch {
+      /* 坏块不参与判断 */
+    }
+  }
+  return { version: 1, layoutMode: 'canvas' }
+}
+
 /** 块文件在仓库里的路径 */
 export function blockPath(dir: Path, id: string): Path {
   return `${dir}/${NOTE_BLOCKS}/${id}.json`
