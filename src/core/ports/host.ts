@@ -71,6 +71,17 @@ export type Host = {
   rmdir(path: string): Promise<void>
 
   /**
+   * 单个文件的大小 / 修改时间。**可选**：拿不到就返回 null，调用方必须自己退让。
+   *
+   * ⚠️ 存在的理由是"校验"：搬迁复制完要逐个比对大小，导入前要知道覆盖没覆盖。
+   *    别把它当性能优化 —— `list()` 在 FSA 上刻意不 stat，就是为了开目录不假死。
+   */
+  stat?(path: string): Promise<{ size: number; mtime: number } | null>
+
+  /** 这个路径在不在。**可选**：没有实现时调用方用 list() 兜底 */
+  exists?(path: string): Promise<boolean>
+
+  /**
    * 换名 / 搬家。**可选** —— 浏览器那条路只能"读出来、写新的、删旧的"。
    *
    * ⚠️ 上层不依赖它：改名在"按差异落盘"的那一层天然就是"写一个新的 + 删掉旧的"，

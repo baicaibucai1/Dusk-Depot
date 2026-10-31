@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   type Book,
+  activeBooks,
   emptyLibrary,
+  markRestored,
+  markTrashed,
   filterBooks,
   formatWhen,
   hashBytes,
@@ -13,6 +16,7 @@ import {
   safeFileName,
   serializeLibrary,
   sortBooks,
+  trashedBooks,
   uniqueFileName,
   upsertBook,
 } from '../../src/core/shelf/library'
@@ -230,5 +234,44 @@ describe('内容哈希', () => {
     expect(ha).toMatch(/^[0-9a-f]{16}$/)
     expect(await hashBytes(a)).toBe(ha)
     expect(await hashBytes(b)).not.toBe(ha)
+  })
+})
+
+describe('回收站：删书先挪走，账要留痕', () => {
+  it('trashedAt / trashFile 能存能读', () => {
+    const lib = upsertBook(emptyLibrary(), book({ trashedAt: 123, trashFile: '.trash/x.epub' }))
+    const parsed = parseLibrary(serializeLibrary(lib))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const b = parsed.library.books[0]!
+    expect(b.trashedAt).toBe(123)
+    expect(b.trashFile).toBe('.trash/x.epub')
+  })
+
+  it('正常列表 / 回收站列表分得开', () => {
+    let lib = upsertBook(emptyLibrary(), book())
+    lib = upsertBook(lib, book({ id: 'b2', file: '球状闪电.epub', fileName: '球状闪电.epub', title: '球状闪电' }))
+    lib = markTrashed(lib, 'b2', '.trash/b2.epub')
+
+    expect(activeBooks(lib).map((b) => b.id)).toEqual(['a1'])
+    expect(trashedBooks(lib).map((b) => b.id)).toEqual(['b2'])
+  })
+
+  it('还原会把 file / trashFile / trashedAt 都清干净', () => {
+    let lib = upsertBook(emptyLibrary(), book())
+    lib = markTrashed(lib, 'a1', '.trash/a1.epub')
+    lib = markRestored(lib, 'a1', '三体 (2).epub')
+
+    const b = activeBooks(lib)[0]!
+    expect(b.file).toBe('三体 (2).epub')
+    expect(b.fileName).toBe('三体 (2).epub')
+    expect(b.trashFile).toBeUndefined()
+    expect(b.trashedAt).toBeUndefined()
+    expect(trashedBooks(lib)).toHaveLength(0)
+  })
+
+  it('同名判断不区分大小写（Windows 上是一回事）', () => {
+    expect(uniqueFileName('三体.epub', ['三体.EPUB'])).toBe('三体 (2).epub')
+    expect(uniqueFileName('三体.epub', ['别的.epub'])).toBe('三体.epub')
   })
 })

@@ -48,6 +48,7 @@ type Props = {
   onApi: (api: ReaderApi | null) => void
   onExternal: (href: string) => void
   onBack: () => void
+  onRetry: () => void
 }
 
 export function EpubReader({
@@ -60,6 +61,7 @@ export function EpubReader({
   onApi,
   onExternal,
   onBack,
+  onRetry,
 }: Props) {
   const host = useRef<HTMLDivElement | null>(null)
   const rendition = useRef<Rendition | null>(null)
@@ -96,6 +98,8 @@ export function EpubReader({
     void (async () => {
       setLoading(true)
       setError(null)
+      // ⚠️ 位置表是**按书**生成的：不重置的话，第二本书会拿第一本的位置表算百分比
+      locReadyRef.current = false
       try {
         const bytes = await shelf.host.read(book.file)
         const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
@@ -138,9 +142,30 @@ export function EpubReader({
 
         r.on('linkClicked', (href: string, event: Event) => {
           event?.preventDefault?.()
-          onExternal(String(href))
+          const h = String(href)
+          // 只有真的"出站"链接才交给系统浏览器；书内锚点自己跳，别把读者困住
+          if (/^(https?:|mailto:)/i.test(h)) {
+            onExternal(h)
+            return false
+          }
+          void r.display(h).catch(() => {})
           return false
         })
+
+        // 键盘：iframe 里的按键不会冒泡到父窗口，必须在 rendition 上再挂一次
+        const onKey = (event: KeyboardEvent) => {
+          const t = event.target as HTMLElement | null
+          if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+          if (event.ctrlKey || event.metaKey || event.altKey) return
+          if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
+            event.preventDefault()
+            void r.next()
+          } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+            event.preventDefault()
+            void r.prev()
+          }
+        }
+        r.on('keydown', onKey)
 
         // 先按 CFI 恢复；CFI 失效就退回章节，再退回百分比
         let shown = false
@@ -234,11 +259,14 @@ export function EpubReader({
     return () => window.clearTimeout(t)
   }, [settings.width, settings.fontSize, settings.lineHeight])
 
-  /* 翻页键 */
+  /* 翻页键（焦点在阅读器外壳 / 工具条上时走这一条） */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+        return
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         e.preventDefault()
         void rendition.current?.next()
@@ -274,15 +302,27 @@ export function EpubReader({
   if (error) {
     return (
       <div className="grid h-full place-items-center px-8">
-        <div className="max-w-[360px] text-center">
-          <p className="text-[13px] text-ink-2">{error}</p>
-          <button
-            type="button"
-            onClick={onBack}
-            className="mt-4 rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-2 hover:bg-surface-2"
-          >
-            返回书架
-          </button>
+        <div className="max-w-[380px] text-center">
+          <p className="text-[13px] leading-relaxed text-ink-2">{error}</p>
+          <div className="mt-4 flex justify-center gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep"
+            >
+              重试打开
+            </button>
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-2 hover:bg-surface-2"
+            >
+              返回书架
+            </button>
+          </div>
+          <p className="mt-3 text-[10.5px] leading-relaxed text-ink-3">
+            如果反复失败，这本书可能损坏或带 DRM；换一本正常书不会保留这个提示。
+          </p>
         </div>
       </div>
     )

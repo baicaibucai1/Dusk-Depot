@@ -56,6 +56,13 @@ export type Book = {
   bookmarks: Bookmark[]
   /** 解析失败 / 文件不在了 —— 列表里显示占位，不隐藏 */
   broken?: boolean
+  /**
+   * 已放进书架回收站（删书先挪到 `.trash/`，不是立刻删）。
+   * 有这个字段的书不进正常列表，只在「最近删除」里出现。
+   */
+  trashedAt?: number
+  /** 回收站里的相对路径（` .trash/xxx.epub`） */
+  trashFile?: string
 }
 
 export type Library = {
@@ -135,6 +142,8 @@ function bookOf(raw: unknown, warnings: string[]): Book | null {
       : {}),
     bookmarks,
     ...(r.broken ? { broken: true } : {}),
+    ...(num(r.trashedAt) > 0 ? { trashedAt: num(r.trashedAt) } : {}),
+    ...(str(r.trashFile) ? { trashFile: str(r.trashFile) } : {}),
   } as Book
 }
 
@@ -191,6 +200,38 @@ export function upsertBook(lib: Library, book: Book): Library {
 
 export function removeBookEntry(lib: Library, id: string): Library {
   return { ...lib, books: lib.books.filter((b) => b.id !== id) }
+}
+
+/** 正常书架（不含回收站） */
+export function activeBooks(lib: Library): Book[] {
+  return lib.books.filter((b) => !b.trashedAt)
+}
+
+/** 回收站里的书 */
+export function trashedBooks(lib: Library): Book[] {
+  return lib.books.filter((b) => Boolean(b.trashedAt))
+}
+
+/** 挪进回收站：只改账，文件由调用方搬 */
+export function markTrashed(lib: Library, id: string, trashFile: string): Library {
+  return patchBook(lib, id, { trashedAt: Date.now(), trashFile, broken: false })
+}
+
+/** 从回收站还原：把账改回去，文件由调用方搬 */
+export function markRestored(lib: Library, id: string, file: string): Library {
+  const book = lib.books.find((b) => b.id === id)
+  if (!book) return lib
+  // ⚠️ 不能 delete：patchBook 是 `{...旧, ...新}`，缺字段不会把旧字段抹掉，
+  //   必须显式写 undefined（JSON 序列化时会消失）。
+  const next: Book = {
+    ...book,
+    file,
+    fileName: file.split('/').pop() ?? file,
+    trashedAt: undefined,
+    trashFile: undefined,
+    broken: undefined,
+  }
+  return patchBook(lib, id, next)
 }
 
 export function patchBook(lib: Library, id: string, patch: Partial<Book>): Library {

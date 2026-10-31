@@ -3,7 +3,7 @@ import type { Snapshot } from './core/model/flush'
 import { diffRepo, flushRepo, settleBaseline } from './core/model/flush'
 import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
-import { kindOf, previewOf } from './core/model/fileKind'
+import { isEpubPath, kindOf, previewOf } from './core/model/fileKind'
 import { isNoteDocPath } from './core/note/format'
 import { emptyFlowDoc, flowDocFiles } from './core/note/flowDoc'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
@@ -61,7 +61,8 @@ import { ShelfMoveDialog } from './ui/shelf/ShelfMoveDialog'
 import { useShelf } from './ui/shelf/useShelf'
 import type { ReaderApi, ReaderLocation, ReaderSettings } from './ui/shelf/EpubReader'
 import type { TocItem } from './core/shelf/epub'
-import { pickShelfDir, type ShelfConfig } from './core/shelf/store'
+import { type ShelfTarget, pickShelfTarget } from './core/shelf/store'
+import { type MoveProgress, type TargetInspection, inspectTarget, moveShelfTo } from './core/shelf/migrate'
 import { importPath, statPath } from './hosts/tauri'
 
 /*
@@ -123,7 +124,10 @@ async function readRepo(
   const underNote = (p: string) => noteRoots.some((root) => p === root || p.startsWith(`${root}/`))
 
   /*
-   * 树里收三类：目录、md、以及**能在中间区预览的**图片 / PDF。
+   * 树里收四类：目录、md、**能预览的**图片 / PDF，以及 `.epub`。
+   *
+   * `.epub` 收进来不是为了读 —— 是为了让人点开时看到"这里不读电子书，
+   * 请去书架"，并且能一键加进书架。否则它只会在树里凭空消失，像丢了一样。
    *
    * 为什么不是"列全部文件"：树里出现的每一项都得能点开做点什么。
    * txt / zip 这一版既不能编辑也不能预览，列出来只是让人点一下没反应。
@@ -135,7 +139,7 @@ async function readRepo(
     if (underNote(e.path)) return false
     if (!isListable(e.path)) return false
     if (e.kind === 'dir') return true
-    return isNote(e.path) || previewOf(e.path) !== null
+    return isNote(e.path) || previewOf(e.path) !== null || isEpubPath(e.path)
   })
   const assets = keep
     .filter((e) => e.kind === 'file' && !isNote(e.path))
@@ -308,10 +312,10 @@ export function App() {
   const [readerLoc, setReaderLoc] = useState<ReaderLocation | null>(null)
   const [readerApi, setReaderApi] = useState<ReaderApi | null>(null)
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>(loadReaderSettings)
-  const [shelfMove, setShelfMove] = useState<
-    { cfg: ShelfConfig; books: number; empty: boolean; hasLibrary: boolean } | null
-  >(null)
+  const [shelfMove, setShelfMove] = useState<{ target: ShelfTarget; info: TargetInspection } | null>(null)
+  const [shelfMoveError, setShelfMoveError] = useState<string | null>(null)
   const [shelfBusy, setShelfBusy] = useState(false)
+  const [moveProgress, setMoveProgress] = useState<MoveProgress | null>(null)
 
   /** 渲染个性化：字号/行距/段距/宽度/字体。存本地，应用时写成根节点的 CSS 变量 */
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
@@ -347,10 +351,16 @@ export function App() {
 
   /* 阅读进度：翻页后防抖写回清单（每本按 bookId 记账，不会串书） */
   const readerSaveTimer = useRef(0)
-  const onReaderLocation = (loc: ReaderLocation) => {
+  /**
+   * ⚠️ 这里**必须**用事件自带的 bookId，不能用 `shelf.openId`：
+   *    旧阅读器卸载时会再发一次 relocated，那时 openId 已经指向新书了，
+   *    按"当前书"记账就会把上一本的位置写进下一本。
+   */
+  const openIdRef = useRef<string | null>(shelf.openId)
+  openIdRef.current = shelf.openId
+  const onReaderLocation = (id: string, loc: ReaderLocation) => {
+    if (openIdRef.current !== id) return
     setReaderLoc(loc)
-    const id = shelf.openId
-    if (!id) return
     window.clearTimeout(readerSaveTimer.current)
     readerSaveTimer.current = window.setTimeout(() => {
       shelf.patchReading(id, {
@@ -1129,80 +1139,113 @@ export function App() {
     return () => window.clearTimeout(t)
   }, [toast])
 
-  async function probeShelfDir(cfg: ShelfConfig) {
-    const { openShelf } = await import('./core/shelf/store')
-    const opened = await openShelf(cfg)
-    if (!opened.ok) return { books: 0, empty: true, hasLibrary: false }
-    const entries = await opened.shelf.host.list().catch(() => [])
-    return {
-      books: entries.filter((e) => e.kind === 'file' && /\.epub$/i.test(e.path)).length,
-      empty: entries.filter((e) => e.kind === 'file').length === 0,
-      hasLibrary: entries.some((e) => e.kind === 'file' && e.path === 'library.json'),
+  async function chooseShelfDir() {
+    if (shelf.importing) {
+      say('warn', '正在导入，等这一批结束再换书架')
+      return
+    }
+    try {
+      // 只拿到"候选目录"，此时 IndexedDB 和配置都还是旧的 —— 取消/关闭对话框不影响当前书架
+      const target = await pickShelfTarget()
+      if (!target) return
+      if (!shelf.shelf || shelf.status === 'setup') {
+        try {
+          await shelf.useConfig(target)
+          setSpace('shelf')
+        } catch (e) {
+          say('error', `书架没换过去：${String(e)}`)
+        }
+        return
+      }
+      const info = await inspectTarget(shelf.shelf, target)
+      setShelfMove({ target, info })
+      setShelfMoveError(null)
+    } catch (e) {
+      say('error', `选目录失败：${String(e)}`)
     }
   }
 
-  async function chooseShelfDir() {
-    const cfg = await pickShelfDir()
-    if (!cfg) return
-    // 还没有书架（首次设置 / 之前打不开）：直接用，不用问"搬不搬"
-    if (!shelf.shelf) {
-      await shelf.useConfig(cfg)
-      return
-    }
-    const info = await probeShelfDir(cfg)
-    setShelfMove({ cfg, ...info })
+  /** 换书架前，把阅读器里"还没写回清单"的那一页先记上 */
+  function flushReaderProgress() {
+    if (!shelf.openId || !readerLoc) return
+    shelf.patchReading(shelf.openId, {
+      cfi: readerLoc.cfi,
+      percent: readerLoc.percent,
+      locator: { chapter: readerLoc.chapter, ratio: readerLoc.percent },
+    })
   }
 
   /**
    * 换书架目录。
-   *   move = 先把当前书架整棵复制过去，再切过去（旧目录**不删**，让用户自己确认）
-   *   use  = 直接用新位置已有的书架（不复制、不覆盖）
+   *   move = 暂存复制 → 校验 → 落位 → 校验通过才切配置；失败旧书架照常用
+   *   use  = 直接用目标位置已有的书架（不复制、不覆盖）
    */
   async function applyShelfMove(mode: 'move' | 'use') {
     const job = shelfMove
-    if (!job) return
-    setShelfMove(null)
+    if (!job || !shelf.shelf) return
     setShelfBusy(true)
+    setShelfMoveError(null)
     try {
-      if (mode === 'move' && shelf.shelf) {
-        if (shelf.shelf.kind === 'tauri' && job.cfg.kind === 'tauri') {
-          const { copyShelfTree } = await import('./hosts/tauri')
-          const n = await copyShelfTree(shelf.shelf.where, job.cfg.dir)
-          say('ok', `已复制 ${n} 个文件到新书架；旧目录没删，确认无误后可以自己清理`)
-        } else {
-          // 浏览器 / 暂存：逐文件读出来再写过去
-          const { openShelf } = await import('./core/shelf/store')
-          const target = await openShelf(job.cfg)
-          if (!target.ok) throw new Error(target.error)
-          const entries = await shelf.shelf.host.list()
-          await target.shelf.host.mkdir('')
-          for (const e of entries) {
-            if (e.kind !== 'file') continue
-            await target.shelf.host.write(e.path, await shelf.shelf.host.read(e.path))
-          }
-          say('ok', '已把书架复制到新位置；旧目录没删')
-        }
+      flushReaderProgress()
+      if (mode === 'move') {
+        await moveShelfTo(shelf.shelf, job.target, setMoveProgress)
       }
-      await shelf.useConfig(job.cfg)
+      await shelf.useConfig(job.target)
+      setShelfMove(null)
+      setSpace('shelf')
+      say(
+        'ok',
+        mode === 'move'
+          ? '书架已搬到新位置；旧目录原样保留，确认无误后可以自己清理'
+          : '已切换到新位置的书架',
+      )
     } catch (e) {
-      say('error', `换书架目录失败：${String(e)}`)
+      // 对话框不关：错误就地显示，用户可以重试或取消；旧书架一直可用
+      setShelfMoveError(String(e instanceof Error ? e.message : e))
     } finally {
       setShelfBusy(false)
+      setMoveProgress(null)
     }
+  }
+
+  /** 打开一本书之前，先把当前这本的进度写回它自己的清单 */
+  function openShelfBook(id: string) {
+    if (shelf.openId && shelf.openId !== id) flushReaderProgress()
+    shelf.openBook(id)
   }
 
   function addShelfBookmark() {
     const book = shelf.books.find((b) => b.id === shelf.openId)
     if (!book) return
     const loc = readerLoc
-    shelf.addMark(book.id, {
+    const r = shelf.addMark(book.id, {
       id: `m-${Date.now().toString(36)}`,
       cfi: loc?.cfi ?? '',
       label: loc?.label || '当前位置',
       percent: loc?.percent ?? book.percent,
       at: Date.now(),
     })
-    say('ok', '已加书签')
+    if (r === 'dup') say('warn', '这个位置已经有书签了')
+    else if (r === 'missing') say('error', '这本书不在当前书架里（可能刚换过目录）')
+    else say('ok', '已加书签')
+  }
+
+  /** 仓库里的 EPUB：复制一份进书架，然后切过去打开。仓库文件不动 */
+  async function addRepoEpubToShelf(path: string) {
+    if (phase.t !== 'ready') return
+    const name = path.split('/').pop() ?? 'book.epub'
+    try {
+      const bytes = await phase.host.read(path)
+      const results = await shelf.importFiles([{ kind: 'bytes', name, bytes }])
+      const hit = results.find((r) => r.ok && r.bookId)
+      if (hit?.bookId) {
+        setSpace('shelf')
+        openShelfBook(hit.bookId)
+        say('ok', `已把《${name}》加进书架（复制了一份，仓库原文件没动）`)
+      }
+    } catch (e) {
+      say('error', `加进书架失败：${String(e)}`)
+    }
   }
 
   /* ───────────────────────── 仓库：reveal / 复制路径 ───────────────────────── */
@@ -1344,18 +1387,22 @@ export function App() {
         if (looksEpub.length === 0) return
         const { statPath: stat } = await import('./hosts/tauri')
         const items = [] as { kind: 'path'; path: string; name: string; size: number }[]
+        const bad: string[] = []
         for (const p of looksEpub) {
           try {
             const st = await stat(p)
             items.push({ kind: 'path', path: p, name: st.name, size: st.size })
-          } catch {
-            /* 读不到就跳过 */
+          } catch (e) {
+            // 不能静默跳过：用户会以为书导进去了
+            bad.push(`${p.split(/[\\/]/).pop() ?? p}（${String(e)}）`)
           }
         }
+        if (bad.length) say('error', `这些文件读不了，没有导入：${bad.join('；')}`)
+        if (items.length === 0) return
         const results = await shelf.importFiles(items)
         if (zone === 'reader') {
-          const first = results.find((r) => r.ok && r.bookId)
-          if (first?.bookId) shelf.openBook(first.bookId)
+          const first = results.find((r) => r.ok && r.bookId && !r.duplicate)
+          if (first?.bookId) openShelfBook(first.bookId)
         }
         return
       }
@@ -1481,6 +1528,7 @@ export function App() {
         <Rail
           space={space}
           onSpace={(next) => {
+            if (space === 'shelf' && next !== 'shelf') flushReaderProgress()
             setSpace(next)
             setTreeOpen(true)
           }}
@@ -1494,14 +1542,14 @@ export function App() {
             <ShelfPanel
               api={shelf}
               activeId={shelf.openId}
-              onPick={(id) => {
-                shelf.openBook(id)
-              }}
+              onPick={openShelfBook}
               onAdd={() => void shelf.addBooks()}
               onChooseDir={() => void chooseShelfDir()}
               onRetry={() => {
-                if (shelf.config) void shelf.reload(shelf.config)
+                if (shelf.config) void shelf.reload(shelf.config).catch((e) => say('error', String(e)))
               }}
+              onRegrant={() => void shelf.regrant()}
+              onRescan={() => void shelf.rescan()}
               width={leftW}
               resizer={
                 <Resizer
@@ -1581,6 +1629,7 @@ export function App() {
             onBookmark={addShelfBookmark}
             onAdd={() => void shelf.addBooks()}
             onChooseDir={() => void chooseShelfDir()}
+            onOpenBook={openShelfBook}
             onExternal={(href) => {
               if (/^https?:/i.test(href) && window.confirm(`要在系统浏览器里打开这个链接吗？\n\n${href}`)) {
                 window.open(href, '_blank', 'noopener,noreferrer')
@@ -1628,6 +1677,17 @@ export function App() {
                     pane.active && noteDocs.includes(pane.active) ? pane.active : null
                   }
                   onNotice={(text) => say('warn', text)}
+                  onAddToShelf={(p) => void addRepoEpubToShelf(p)}
+                  onOpenShelf={() => setSpace('shelf')}
+                  shelfCanAdd={shelf.status === 'ready' && !shelf.importing}
+                  shelfBusy={shelf.importing}
+                  shelfReason={
+                    shelf.status === 'setup'
+                      ? '先到左侧「书架」选一个书架目录，再回来添加'
+                      : shelf.status === 'error'
+                        ? '书架现在打不开，先去「书架」处理一下'
+                        : undefined
+                  }
                   onNoteInfo={(dir, info) =>
                     setNoteInfo((prev) => {
                       const old = prev[dir]
@@ -1668,7 +1728,9 @@ export function App() {
           onGoTo={(href) => readerApi?.goTo(href)}
           onGoToMark={(m) => (m.cfi ? readerApi?.goTo(m.cfi) : readerApi?.goToPercent(m.percent))}
           onDropMark={(id) => {
-            if (shelf.openId) shelf.dropMark(shelf.openId, id)
+            if (!shelf.openId) return
+            if (shelf.dropMark(shelf.openId, id)) say('ok', '已删除书签')
+            else say('warn', '这条书签已经不在了')
           }}
           onClose={() => setAsideOpen(false)}
           resizer={
@@ -1732,7 +1794,7 @@ export function App() {
         <div
           role="status"
           className={[
-            'fixed bottom-5 left-1/2 z-[70] max-w-[min(560px,90vw)] -translate-x-1/2 rounded-lg border px-3.5 py-2 text-[12px] shadow-[0_10px_28px_rgba(16,35,28,0.16)]',
+            'fixed bottom-5 left-1/2 z-[70] flex max-w-[min(560px,90vw)] -translate-x-1/2 items-start gap-1 rounded-lg border px-3.5 py-2 text-[12px] shadow-[0_10px_28px_rgba(16,35,28,0.16)]',
             (toast?.kind ?? shelf.notice?.kind) === 'error'
               ? 'border-[#f0c9c5] bg-[#fdf0ef] text-[#8f1d17]'
               : (toast?.kind ?? shelf.notice?.kind) === 'warn'
@@ -1741,19 +1803,34 @@ export function App() {
           ].join(' ')}
         >
           <span className="break-words">{toast?.text ?? shelf.notice?.text}</span>
+          <button
+            type="button"
+            aria-label="关闭提示"
+            onClick={() => {
+              setToast(null)
+              shelf.setNotice(null)
+            }}
+            className="ml-2 shrink-0 rounded px-1 text-[13px] leading-none opacity-60 hover:opacity-100"
+          >
+            ×
+          </button>
         </div>
       ) : null}
 
       {shelfMove ? (
         <ShelfMoveDialog
-          where={shelfMove.cfg.dir}
-          books={shelfMove.books}
-          empty={shelfMove.empty}
-          hasLibrary={shelfMove.hasLibrary}
+          target={shelfMove.target}
+          info={shelfMove.info}
           busy={shelfBusy}
+          error={shelfMoveError}
+          progress={moveProgress}
           onMove={() => void applyShelfMove('move')}
           onUse={() => void applyShelfMove('use')}
-          onCancel={() => setShelfMove(null)}
+          onCancel={() => {
+            if (shelfBusy) return
+            setShelfMove(null)
+            setShelfMoveError(null)
+          }}
         />
       ) : null}
 
@@ -1768,13 +1845,17 @@ export function App() {
             kind: shelf.shelf?.kind ?? '',
             durable: shelf.shelf?.durable ?? false,
             canReveal: shelf.shelf?.canReveal ?? false,
+            nameOnly: shelf.shelf?.nameOnly ?? false,
             busy: shelfBusy || shelf.status === 'loading',
-            error: shelf.status === 'error' ? shelf.error : null,
+            importing: shelf.importing,
+            error: shelf.error,
+            canRegrant: shelf.errorRegrant,
             onChange: () => void chooseShelfDir(),
             onReveal: () => void shelf.reveal(),
             onRetry: () => {
-              if (shelf.config) void shelf.reload(shelf.config)
+              if (shelf.config) void shelf.reload(shelf.config).catch((e) => say('error', String(e)))
             },
+            onRegrant: () => void shelf.regrant(),
           }}
         />
       ) : null}

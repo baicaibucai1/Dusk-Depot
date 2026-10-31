@@ -19,6 +19,8 @@ export type FileKind =
   | 'image'
   /** PDF：只读预览（多页、可选文本） */
   | 'pdf'
+  /** EPUB 电子书：**不在文件区读**，交给书架 */
+  | 'epub'
   /** 压缩包 */
   | 'archive'
   /** 认不出的 */
@@ -30,7 +32,7 @@ const EXT_KIND: Record<string, FileKind> = {
   '.txt': 'text',
   '.log': 'text',
   '.pdf': 'pdf',
-  '.epub': 'text',
+  '.epub': 'epub',
   '.ts': 'code',
   '.tsx': 'code',
   '.js': 'code',
@@ -78,6 +80,11 @@ export function kindOf(path: string): FileKind {
 /** 只有 md 能在这版里编辑；其余一律只读或交给系统（见方案书 D1） */
 export function canEdit(path: string): boolean {
   return kindOf(path) === 'md'
+}
+
+/** 电子书：文件区只显示一条"去书架"的说明，绝不当文本打开 */
+export function isEpubPath(path: string): boolean {
+  return kindOf(path) === 'epub'
 }
 
 /** 能在中间工作区**只读预览**的类型；其余交给系统程序 */

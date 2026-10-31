@@ -207,6 +207,29 @@ export function fsaHost(handle: Dir): Host {
       await dir.removeEntry(name, { recursive: true })
     },
 
+    async stat(path) {
+      const { parts, name } = split(path)
+      try {
+        const dir = await sub(handle, parts, false)
+        const fh = await dir.getFileHandle(name)
+        const f = await fh.getFile()
+        return { size: f.size, mtime: f.lastModified }
+      } catch {
+        return null
+      }
+    },
+
+    async exists(path) {
+      const { parts, name } = split(path)
+      try {
+        const dir = await sub(handle, parts, false)
+        await dir.getFileHandle(name)
+        return true
+      } catch {
+        return false
+      }
+    },
+
     async mkdir(path) {
       await sub(handle, path.split('/').filter(Boolean), true)
     },

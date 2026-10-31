@@ -100,6 +100,37 @@ fn fs_stat(src: String) -> Result<FileStat, String> {
   stat_of(std::path::Path::new(&src))
 }
 
+/// 书架 / 仓库内单个文件的大小（相对路径，走同一套越界检查）
+#[tauri::command]
+fn repo_stat(root: String, path: String) -> Result<FileStat, String> {
+  let full = fs_ops::join(std::path::Path::new(&root), &path)?;
+  stat_of(&full)
+}
+
+/**
+ * 宿主内换名 / 搬家。
+ *
+ * 只接受 root 下的相对路径，`..` 一律拒；目标已存在就报错 —— **绝不覆盖**。
+ * 同一个根目录内是原子 rename；跨盘时 rename 会失败，这里不做 copy 降级
+ * （书架的搬迁有自己的"复制 → 校验 → 落位"流程，不靠这个命令跨盘）。
+ */
+#[tauri::command]
+fn repo_move(root: String, from: String, to: String) -> Result<(), String> {
+  let root_path = std::path::Path::new(&root);
+  let a = fs_ops::join(root_path, &from)?;
+  let b = fs_ops::join(root_path, &to)?;
+  if !a.exists() {
+    return Err(format!("源文件不在了：{from}"));
+  }
+  if b.exists() {
+    return Err(format!("目标已存在，不覆盖：{to}"));
+  }
+  if let Some(parent) = b.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| format!("建不了目录：{e}"))?;
+  }
+  std::fs::rename(&a, &b).map_err(|e| format!("搬不了 {from} → {to}：{e}"))
+}
+
 /**
  * 把外部文件**复制**进某个根目录（仓库或书架）。
  *
@@ -219,6 +250,8 @@ pub fn run() {
       repo_default_dir,
       shelf_default_dir,
       fs_stat,
+      repo_stat,
+      repo_move,
       fs_import_file,
       shelf_copy_tree,
       fs_reveal

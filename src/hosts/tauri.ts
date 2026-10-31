@@ -46,6 +46,26 @@ export function tauriHost(root: string): Host {
     mkdir: async (path) => invoke<void>('repo_mkdir', { root, path }),
     rmdir: async (path) => invoke<void>('repo_rmdir', { root, path }),
 
+    async stat(path) {
+      try {
+        const st = await invoke<RawEntry>('repo_stat', { root, path })
+        return { size: st.size, mtime: st.mtime }
+      } catch {
+        return null
+      }
+    },
+
+    async exists(path) {
+      try {
+        await invoke<RawEntry>('repo_stat', { root, path })
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    move: async (from, to) => invoke<void>('repo_move', { root, from, to }),
+
     /*
      * 在资源管理器里定位。绝对路径**不给前端拼**：
      * 传进去的是 root + 相对路径，Rust 那边用同一套 join 做越界检查，

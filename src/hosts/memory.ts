@@ -103,6 +103,19 @@ export function memoryHost(): Host {
       write(blob)
     },
 
+    async stat(path) {
+      const { files } = read()
+      const v = files[path]
+      if (v === undefined) return null
+      const size = v.startsWith(B64) ? fromBase64(v.slice(B64.length)).length : encodeText(v).length
+      return { size, mtime: 0 }
+    },
+
+    async exists(path) {
+      const { files } = read()
+      return path in files
+    },
+
     async mkdir(path) {
       const blob = read()
       // 连父目录一起补上，否则只建了叶子、树上看不见中间那层

@@ -3,8 +3,8 @@
  *
  * 阅读器本体懒加载 —— epub.js 只在真的打开一本书后才下载。
  */
-import { ArrowLeft, BookmarkPlus, ChevronLeft, ChevronRight, Minus, Plus, Type } from 'lucide-react'
-import { Suspense, lazy, useState } from 'react'
+import { ArrowLeft, BookmarkPlus, ChevronLeft, ChevronRight, Minus, Plus, RotateCw, Type } from 'lucide-react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import type { TocItem } from '../../core/shelf/epub'
 import { setHighlight } from '../dnd'
 import { type Book, percentLabel } from '../../core/shelf/library'
@@ -27,11 +27,13 @@ type Props = {
   loc: ReaderLocation | null
   readerApi: ReaderApi | null
   onToc: (t: TocItem[]) => void
-  onLoc: (loc: ReaderLocation) => void
+  onLoc: (bookId: string, loc: ReaderLocation) => void
   onReaderApi: (api: ReaderApi | null) => void
   onBookmark: () => void
   onAdd: () => void
   onChooseDir: () => void
+  /** 打开一本书（外层负责先把上一本的进度写回去） */
+  onOpenBook: (id: string) => void
   onExternal: (href: string) => void
 }
 
@@ -48,10 +50,18 @@ export function ShelfMain({
   onBookmark,
   onAdd,
   onChooseDir,
+  onOpenBook,
   onExternal,
 }: Props) {
   const [showPrefs, setShowPrefs] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [readerKey, setReaderKey] = useState(0)
+
+  /* 换书就把上一本的错误收掉，别让新书顶着旧报错 */
+  useEffect(() => {
+    setErr(null)
+    setReaderKey((n) => n + 1)
+  }, [book?.id])
 
   if (api.status === 'setup') {
     return <Setup onChooseDir={onChooseDir} />
@@ -60,15 +70,25 @@ export function ShelfMain({
   if (api.status === 'error') {
     return (
       <main className="grid h-full min-w-0 flex-1 place-items-center bg-paper px-8">
-        <div className="max-w-[380px] text-center">
+        <div className="max-w-[400px] text-center">
           <p className="text-[14px] font-medium text-ink">书架打不开</p>
           <p className="mt-2 text-[12px] leading-relaxed break-words text-ink-3">{api.error}</p>
-          <div className="mt-4 flex justify-center gap-2">
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {api.errorRegrant ? (
+              <button
+                type="button"
+                onClick={() => void api.regrant()}
+                className="rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep"
+              >
+                重新授权
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {
-                if (api.config) void api.reload(api.config)
+                if (api.config) void api.reload(api.config).catch(() => {})
               }}
+              title="重新打开这个目录（不会重新申请浏览器权限）"
               className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-2 hover:bg-surface-2"
             >
               重试
@@ -76,11 +96,14 @@ export function ShelfMain({
             <button
               type="button"
               onClick={onChooseDir}
-              className="rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep"
+              className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-2 hover:bg-surface-2"
             >
               重新选目录
             </button>
           </div>
+          <p className="mt-3 text-[10.5px] leading-relaxed text-ink-3">
+            「重试」只是再打开一次；「重新授权」会请求浏览器重新给读写权限（必须由你点）。
+          </p>
         </div>
       </main>
     )
@@ -92,8 +115,9 @@ export function ShelfMain({
         onAdd={onAdd}
         count={api.books.length}
         durable={api.shelf?.durable ?? false}
+        nameOnly={api.shelf?.nameOnly ?? false}
         where={api.shelf?.where ?? ''}
-        onDropEpub={(files) => void importInto(api, files)}
+        onDropEpub={(files) => void importInto(api, files, false, onOpenBook)}
       />
     )
   }
@@ -104,7 +128,7 @@ export function ShelfMain({
       data-dd-reader
       data-drop-zone="reader"
       onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return
+        if (!e.dataTransfer.types.includes('Files') || api.importing) return
         e.preventDefault()
         e.dataTransfer.dropEffect = 'copy'
         setHighlight({ zone: 'reader', dir: null, el: e.currentTarget })
@@ -114,7 +138,8 @@ export function ShelfMain({
         if (e.dataTransfer.files.length === 0) return
         e.preventDefault()
         setHighlight(null)
-        void importInto(api, [...e.dataTransfer.files], true)
+        if (api.importing) return
+        void importInto(api, [...e.dataTransfer.files], true, onOpenBook)
       }}
     >
       <header className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
@@ -186,30 +211,57 @@ export function ShelfMain({
       <div className="min-h-0 flex-1">
         <Suspense fallback={<div className="grid h-full place-items-center text-[12.5px] text-ink-3">正在准备阅读器…</div>}>
           <EpubReader
+            key={readerKey}
             shelf={api.shelf!}
             book={book}
             settings={settings}
             onToc={onToc}
-            onLocation={onLoc}
+            onLocation={(loc) => onLoc(book.id, loc)}
             onError={setErr}
             onApi={onReaderApi}
             onExternal={onExternal}
             onBack={() => api.closeBook()}
+            onRetry={() => {
+              setErr(null)
+              setReaderKey((n) => n + 1)
+            }}
           />
         </Suspense>
       </div>
 
-      {err ? <p className="border-t border-line px-3 py-1.5 text-[11px] text-[#b3261e]">{err}</p> : null}
+      {err ? (
+        <p className="flex items-center gap-2 border-t border-line px-3 py-1.5 text-[11px] text-[#b3261e]">
+          <span className="min-w-0 flex-1 truncate">{err}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setErr(null)
+              setReaderKey((n) => n + 1)
+            }}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[10.5px] text-ink-2 hover:bg-surface-2"
+          >
+            <RotateCw className="size-3" />
+            重试
+          </button>
+          <button
+            type="button"
+            onClick={() => api.closeBook()}
+            className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10.5px] text-ink-2 hover:bg-surface-2"
+          >
+            返回书架
+          </button>
+        </p>
+      ) : null}
     </main>
   )
 }
 
 /** 拖进来的文件交给书架；阅读页里拖入成功后直接打开第一本 */
-async function importInto(api: ShelfApi, files: File[], openFirst = false) {
+async function importInto(api: ShelfApi, files: File[], openFirst: boolean, onOpenBook: (id: string) => void) {
   const results = await api.importFiles(files.map((file) => ({ kind: 'file' as const, file })))
   if (!openFirst) return
-  const hit = results.find((r) => r.ok && r.bookId)
-  if (hit?.bookId) api.openBook(hit.bookId)
+  const hit = results.find((r) => r.ok && r.bookId && !r.duplicate)
+  if (hit?.bookId) onOpenBook(hit.bookId)
 }
 
 function Prefs({
@@ -292,12 +344,14 @@ function Welcome({
   onAdd,
   count,
   durable,
+  nameOnly,
   where,
   onDropEpub,
 }: {
   onAdd: () => void
   count: number
   durable: boolean
+  nameOnly: boolean
   where: string
   onDropEpub: (files: File[]) => void
 }) {
@@ -341,7 +395,14 @@ function Welcome({
           添加 EPUB
         </button>
         <p className="mt-5 text-[10.5px] leading-relaxed text-ink-3">
-          {durable ? <>书架位置：<span className="font-mono break-all">{where}</span></> : '当前是暂存模式：书只在这次会话里，关掉就没了。'}
+          {durable ? (
+            <>
+              书架位置：<span className="font-mono break-all">{where}</span>
+              {nameOnly ? '（浏览器只显示目录名）' : ''}
+            </>
+          ) : (
+            '当前是暂存模式：书只在这次会话里，关掉就没了。'
+          )}
         </p>
       </div>
     </main>

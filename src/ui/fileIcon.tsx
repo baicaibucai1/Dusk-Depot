@@ -12,6 +12,7 @@
  * 将来接「每个文件夹自定义图标」时，这张表从 `.dusk/icons.json` 读。
  */
 import {
+  BookOpen,
   File,
   FileArchive,
   FileCode,
@@ -35,6 +36,7 @@ const BY_KIND: Record<FileKind, LucideIcon | null> = {
   code: FileCode,
   sheet: FileSpreadsheet,
   image: FileImage,
+  epub: BookOpen,
   archive: FileArchive,
   unknown: FileQuestion,
 }

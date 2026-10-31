@@ -28,49 +28,165 @@ export function looksLikeEpub(bytes: Uint8Array): boolean {
   return head.includes('application/epub+zip')
 }
 
+/*
+ * ── ZIP 读取（只读中央目录，不扫全文件） ──
+ *
+ * 为什么不用 epub.js 的 archive：判断 DRM 必须看 `META-INF/encryption.xml`
+ * 的**内容**，而它是压缩的；在整份字节里 grep 只能看到文件名，还会给 200MB 的
+ * 书多造一份大字符串。这里只做三件事：找 EOCD → 走中央目录 → 解一个小条目。
+ *
+ * 所有长度都来自文件本身，必须当成不可信输入：条目数、目录大小、解压后大小
+ * 都有上限，任何越界一律返回 null（当作"没有这个条目"），绝不抛异常拖垮导入。
+ */
+
+/** 中央目录最多认这么多条 —— 正常 EPUB 是几百到几千 */
+const MAX_ZIP_ENTRIES = 100_000
+/** 中央目录本身的上限，挡住"目录比文件还大"的构造输入 */
+const MAX_CD_BYTES = 8 * 1024 * 1024
+/** encryption.xml 是几百字节的小文件；给到 256KB 已经很宽松 */
+const MAX_ENTRY_BYTES = 256 * 1024
+
+export type ZipEntryInfo = {
+  name: string
+  method: number
+  compSize: number
+  uncompSize: number
+  localOffset: number
+}
+
+function at(bytes: Uint8Array, i: number): number {
+  return bytes[i] ?? -1
+}
+
+function u16(bytes: Uint8Array, i: number): number {
+  return (at(bytes, i) & 0xff) | ((at(bytes, i + 1) & 0xff) << 8)
+}
+
+function u32(bytes: Uint8Array, i: number): number {
+  return (
+    ((at(bytes, i) & 0xff) |
+      ((at(bytes, i + 1) & 0xff) << 8) |
+      ((at(bytes, i + 2) & 0xff) << 16) |
+      ((at(bytes, i + 3) & 0xff) << 24)) >>>
+    0
+  )
+}
+
+/** 从尾部找 EOCD（`PK\x05\x06`）；ZIP 注释最长 65535，所以只扫最后 66KB */
+function findEocd(bytes: Uint8Array): { count: number; cdOffset: number; cdSize: number } | null {
+  const min = Math.max(0, bytes.length - 66_000)
+  for (let i = bytes.length - 22; i >= min; i--) {
+    if (u32(bytes, i) !== 0x06054b50) continue
+    const commentLen = u16(bytes, i + 20)
+    if (i + 22 + commentLen > bytes.length) continue
+    const count = u16(bytes, i + 10)
+    const cdSize = u32(bytes, i + 12)
+    const cdOffset = u32(bytes, i + 16)
+    if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) return null // ZIP64：不认
+    if (count > MAX_ZIP_ENTRIES || cdSize > MAX_CD_BYTES) return null
+    if (cdOffset + cdSize > bytes.length) return null
+    return { count, cdOffset, cdSize }
+  }
+  return null
+}
+
+/** 在中央目录里找一条。找不到 / 结构不对都返回 null */
+export function zipEntryInfo(bytes: Uint8Array, name: string): ZipEntryInfo | null {
+  const eocd = findEocd(bytes)
+  if (!eocd) return null
+  const want = new TextEncoder().encode(name)
+
+  let p = eocd.cdOffset
+  const end = eocd.cdOffset + eocd.cdSize
+  for (let i = 0; i < eocd.count; i++) {
+    if (p + 46 > end || p + 46 > bytes.length) return null
+    if (u32(bytes, p) !== 0x02014b50) return null
+
+    const method = u16(bytes, p + 10)
+    const compSize = u32(bytes, p + 20)
+    const uncompSize = u32(bytes, p + 24)
+    const nameLen = u16(bytes, p + 28)
+    const extraLen = u16(bytes, p + 30)
+    const commentLen = u16(bytes, p + 32)
+    const localOffset = u32(bytes, p + 42)
+    if (p + 46 + nameLen > end) return null
+
+    let hit = nameLen === want.length
+    if (hit) {
+      for (let k = 0; k < nameLen; k++) {
+        if (at(bytes, p + 46 + k) !== want[k]) {
+          hit = false
+          break
+        }
+      }
+    }
+    if (hit) {
+      return { name, method, compSize, uncompSize, localOffset }
+    }
+    p += 46 + nameLen + extraLen + commentLen
+  }
+  return null
+}
+
+/** 解压 deflate-raw，**带输出上限**：超过就取消，绝不把 zip bomb 全解进内存 */
+async function inflateCapped(data: Uint8Array, cap: number): Promise<Uint8Array | null> {
+  if (typeof DecompressionStream === 'undefined') return null
+  const stream = new Blob([data as unknown as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.length
+      if (total > cap) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.length
+  }
+  return out
+}
+
 /**
- * 从 ZIP 里读一个小文本文件（只支持 store / deflate）。
- *
- * 为什么自己读：判断"这本书是不是 DRM"必须看 `META-INF/encryption.xml` 的内容，
- * 而它是压缩的 —— 在字节流里直接 grep 只能看到文件名。epub.js 的 archive 接口
- * 对不存在的条目返回 undefined，也不方便区分"字体混淆"和"真加密"。
- *
- * 只扫本地文件头（PK\\x03\\x04），够用且不依赖任何库。
+ * 从 ZIP 里读一个小文本条目（store / deflate）。
+ * 找不到、超限、结构坏、解压失败都返回 null。
  */
 export async function readZipText(bytes: Uint8Array, name: string): Promise<string | null> {
-  const want = new TextEncoder().encode(name)
-  const at = (i: number) => bytes[i] ?? 0
-  const u16 = (i: number) => at(i) | (at(i + 1) << 8)
-  const u32 = (i: number) => (at(i) | (at(i + 1) << 8) | (at(i + 2) << 16) | (at(i + 3) << 24)) >>> 0
+  const info = zipEntryInfo(bytes, name)
+  if (!info) return null
+  if (info.uncompSize > MAX_ENTRY_BYTES || info.compSize > MAX_ENTRY_BYTES) return null
 
-  for (let i = 0; i + 30 < bytes.length; i++) {
-    if (at(i) !== 0x50 || at(i + 1) !== 0x4b || at(i + 2) !== 0x03 || at(i + 3) !== 0x04) continue
-    const method = u16(i + 8)
-    const compSize = u32(i + 18)
-    const nameLen = u16(i + 26)
-    const extraLen = u16(i + 28)
-    if (nameLen !== want.length) continue
-    let same = true
-    for (let k = 0; k < nameLen; k++) {
-      if (bytes[i + 30 + k] !== want[k]) {
-        same = false
-        break
-      }
+  // 本地文件头：签名、名字长度、扩展长度都要复核 —— 中央目录和本地头可能不一致
+  const lo = info.localOffset
+  if (lo + 30 > bytes.length || u32(bytes, lo) !== 0x04034b50) return null
+  const localNameLen = u16(bytes, lo + 26)
+  const localExtraLen = u16(bytes, lo + 28)
+  const start = lo + 30 + localNameLen + localExtraLen
+  const stop = start + info.compSize
+  if (start > bytes.length || stop > bytes.length) return null
+  const data = bytes.subarray(start, stop)
+
+  try {
+    if (info.method === 0) {
+      if (data.length > MAX_ENTRY_BYTES) return null
+      return new TextDecoder('utf-8').decode(data)
     }
-    if (!same) continue
-    if (compSize === 0) return null
-    const start = i + 30 + nameLen + extraLen
-    const data = bytes.subarray(start, start + compSize)
-    try {
-      if (method === 0) return new TextDecoder('utf-8').decode(data)
-      if (method === 8 && typeof DecompressionStream !== 'undefined') {
-        const ds = new DecompressionStream('deflate-raw')
-        const stream = new Blob([data as unknown as BlobPart]).stream().pipeThrough(ds)
-        return await new Response(stream).text()
-      }
-    } catch {
-      return null
+    if (info.method === 8) {
+      const raw = await inflateCapped(data, MAX_ENTRY_BYTES)
+      return raw ? new TextDecoder('utf-8').decode(raw) : null
     }
+  } catch {
     return null
   }
   return null
@@ -79,18 +195,53 @@ export async function readZipText(bytes: Uint8Array, name: string): Promise<stri
 export type EncryptionKind = 'none' | 'fonts' | 'drm'
 
 /**
+ * `META-INF/encryption.xml` 到底说了什么。
+ *
+ * EPUB 里这份清单有两种用途，**必须分开**：
+ *   · 字体混淆（idpf.org/2008/embedding、adobe pdf/enc#RC，或 CipherReference
+ *     指向 .otf/.ttf/.woff）—— 合法，书能正常读；
+ *   · DRM（xmlenc#aes*、adept、rights.xml）—— 不支持，也不绕。
+ *
+ * 一刀切成"有 encryption.xml 就是 DRM"会误伤大量带字体混淆的老书。
+ */
+export function classifyEncryptionXml(xml: string): EncryptionKind {
+  const blocks = xml.split(/<(?:\w+:)?EncryptedData\b/i).slice(1)
+  if (blocks.length === 0) {
+    // 没有 EncryptedData 结构，退化成看算法串；但仍然优先认字体混淆
+    if (/xmlenc#aes|aes(128|256)-cbc|adept|rights\.xml|encrypted-key/i.test(xml)) return 'drm'
+    if (/idpf\.org\/2008\/embedding|ns\.adobe\.com\/pdf\/enc#RC/i.test(xml)) return 'fonts'
+    return 'none'
+  }
+
+  let fonts = false
+  for (const b of blocks) {
+    const alg = /<(?:\w+:)?EncryptionMethod\b[^>]*Algorithm\s*=\s*"([^"]*)"/i.exec(b)?.[1] ?? ''
+    const uri = /<(?:\w+:)?CipherReference\b[^>]*URI\s*=\s*"([^"]*)"/i.exec(b)?.[1] ?? ''
+    const fontAlg = /idpf\.org\/2008\/embedding|ns\.adobe\.com\/pdf\/enc#RC/i.test(alg)
+    const drmAlg = /xmlenc#aes|aes(128|256)?-cbc|adept|rights\.xml|encrypted-key/i.test(alg)
+    const fontUri = /\.(otf|ttf|ttc|woff2?|eot)(?:[?#]|$)/i.test(uri)
+
+    if (drmAlg) return 'drm'
+    if (fontAlg || fontUri) fonts = true
+    else return 'drm' // 有加密资源，但既不是字体也不是已知算法 —— 当作 DRM
+  }
+  return fonts ? 'fonts' : 'none'
+}
+
+/**
  * 这本书到底加没加密。
  *
- *   · 只有 `embedding` / `pdf/enc#RC` → **字体混淆**，正常书，照读；
- *   · 出现 `xmlenc#aes` / `adept` / `rights.xml` → **DRM**，不支持，也不绕。
- *
- * 一刀切会把带字体混淆的老书误判成 DRM，那种书其实完全能读。
+ * 只读中央目录 + `encryption.xml` 一个小条目，**不会**把整本书解码成字符串。
  */
 export async function encryptionOfBytes(bytes: Uint8Array): Promise<EncryptionKind> {
   const xml = await readZipText(bytes, 'META-INF/encryption.xml')
-  if (!xml) return 'none'
-  if (/xmlenc#aes|aes(128|256)-cbc|adept|rights\.xml|encrypted-key/i.test(xml)) return 'drm'
-  if (/idpf\.org\/2008\/embedding|ns\.adobe\.com\/pdf\/enc#RC/i.test(xml)) return 'fonts'
+  if (xml) {
+    const kind = classifyEncryptionXml(xml)
+    if (kind !== 'none') return kind
+  }
+  // Adobe DRM 有时只有 rights.xml（没有 encryption.xml）
+  const rights = await readZipText(bytes, 'META-INF/rights.xml')
+  if (rights && /rights|adept|drm/i.test(rights)) return 'drm'
   return 'none'
 }
 

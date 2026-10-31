@@ -7,6 +7,8 @@
 
 产出：
   三体.epub          正常书：EPUB 3，中文书名/作者，两章，一张 PNG 封面
+  银河.epub          第二本正常书（不同内容哈希，测切书不串进度）
+  基地.epub          第三本正常书（测"仓库 EPUB 加进书架"）
   损坏.epub          不是 ZIP 的假货（测"打不开"）
   加密.epub          带 META-INF/encryption.xml 的假 DRM（测"不支持 DRM"）
 
@@ -52,14 +54,21 @@ def chapter(title: str, body: str) -> str:
 """
 
 
-def build(path: str, drm: bool = False) -> None:
-    cover = png(60, 80, (14, 155, 102))
-    opf = """<?xml version="1.0" encoding="utf-8"?>
+def build(
+    path: str,
+    drm: bool = False,
+    title: str = "三体",
+    author: str = "刘慈欣",
+    uid: str = "6f6b2f0e-test-book",
+    accent: tuple[int, int, int] = (14, 155, 102),
+) -> None:
+    cover = png(60, 80, accent)
+    opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid">urn:uuid:6f6b2f0e-test-book</dc:identifier>
-    <dc:title>三体</dc:title>
-    <dc:creator>刘慈欣</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:{uid}</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
     <dc:publisher>测试出版社</dc:publisher>
     <dc:language>zh-CN</dc:language>
     <meta property="dcterms:modified">2026-10-31T00:00:00Z</meta>
@@ -139,6 +148,20 @@ def main() -> None:
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.environ.get("TEMP", "."), "dd-shelf-epub")
     os.makedirs(out, exist_ok=True)
     build(os.path.join(out, "三体.epub"))
+    build(
+        os.path.join(out, "银河.epub"),
+        title="银河系搭车客指南",
+        author="道格拉斯·亚当斯",
+        uid="9a1c0f3e-second-book",
+        accent=(36, 92, 160),
+    )
+    build(
+        os.path.join(out, "基地.epub"),
+        title="基地",
+        author="艾萨克·阿西莫夫",
+        uid="3d7e2b1a-third-book",
+        accent=(120, 70, 160),
+    )
     build_drm(os.path.join(out, "加密.epub"))
     with open(os.path.join(out, "损坏.epub"), "wb") as f:
         f.write(b"this is not a zip file, just text pretending to be an epub" * 3)

@@ -13,11 +13,17 @@ export type ShelfInfo = {
   kind: string
   durable: boolean
   canReveal: boolean
+  /** 浏览器只能显示目录名 */
+  nameOnly: boolean
   busy: boolean
+  importing: boolean
   error: string | null
+  /** 浏览器句柄还在，点一下可以重新申请权限 */
+  canRegrant: boolean
   onChange: () => void
   onReveal: () => void
   onRetry: () => void
+  onRegrant: () => void
 }
 
 type Props = {
@@ -139,7 +145,12 @@ export function SettingsDialog({ settings, onChange, onClose, onReset, shelf }: 
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/25 p-6">
-      <div className="flex h-[600px] w-[880px] overflow-hidden rounded-2xl border border-line bg-paper shadow-[0_28px_70px_-20px_rgba(16,35,28,0.45)]">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        className="flex h-[600px] w-[880px] overflow-hidden rounded-2xl border border-line bg-paper shadow-[0_28px_70px_-20px_rgba(16,35,28,0.45)]"
+      >
         {/* 左：分组导航 */}
         <aside className="flex w-[228px] shrink-0 flex-col border-r border-line bg-surface/60">
           <div className="p-3">
@@ -320,14 +331,20 @@ export function SettingsDialog({ settings, onChange, onClose, onReset, shelf }: 
                   title="书架位置"
                   desc="电子书、书架清单（library.json）、阅读进度和书签都放在这个目录里；跟仓库完全分开，切仓库不会动它。"
                 >
-                  <div className="flex max-w-[300px] flex-col items-end gap-1">
-                    <span className="max-w-[300px] truncate font-mono text-[11px] text-ink-2" title={shelf?.where ?? ''}>
+                  <div className="flex w-[280px] flex-col items-end gap-1">
+                    <span className="max-w-full truncate font-mono text-[11px] text-ink-2" title={shelf?.where ?? ''}>
                       {shelf?.where || '未设置'}
                     </span>
+                    {shelf?.nameOnly ? (
+                      <span className="text-right text-[10px] leading-snug text-ink-3">
+                        浏览器只拿得到目录名，完整路径以系统选择器里选的为准
+                      </span>
+                    ) : null}
                     <div className="flex gap-1.5">
                       <button
                         type="button"
-                        disabled={!shelf || shelf.busy}
+                        disabled={!shelf || shelf.busy || shelf.importing}
+                        title={shelf?.importing ? '正在导入，等这一批结束' : undefined}
                         onClick={shelf?.onChange}
                         className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2 disabled:opacity-50"
                       >
@@ -347,23 +364,51 @@ export function SettingsDialog({ settings, onChange, onClose, onReset, shelf }: 
                 </Row>
                 <Row
                   title="换位置时不会自动覆盖"
-                  desc="新目录里已有书架就只能选“使用”；搬迁需要空目录，而且旧目录不会自动删。"
+                  desc="新目录里已有书架就只能选“使用”；搬迁需要空目录，先复制到暂存目录校验，成功后才切；旧目录不删。"
                   last
                 >
-                  <span className="text-[12px] text-ink-3">{shelf?.durable ? '磁盘目录' : '暂存（不落盘）'}</span>
+                  <span className="text-[12px] text-ink-3">
+                    {shelf?.durable ? '磁盘目录' : '暂存（不落盘）'}
+                    {shelf?.importing ? ' · 正在导入' : ''}
+                  </span>
                 </Row>
               </Section>
 
               {shelf?.error ? (
                 <Section title="状态">
-                  <Row title="书架打不开" desc={shelf.error} last>
-                    <button
-                      type="button"
-                      onClick={shelf.onRetry}
-                      className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2"
-                    >
-                      重试
-                    </button>
+                  <Row
+                    title={shelf.canRegrant ? '需要重新授权' : '书架打不开'}
+                    desc={shelf.error}
+                  >
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {shelf.canRegrant ? (
+                        <button
+                          type="button"
+                          onClick={shelf.onRegrant}
+                          className="rounded-md bg-green px-2 py-1 text-[11.5px] text-white hover:bg-green-deep"
+                        >
+                          重新授权
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={shelf.onRetry}
+                        title="重新打开这个目录（不会重新申请浏览器权限）"
+                        className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2"
+                      >
+                        重试
+                      </button>
+                      <button
+                        type="button"
+                        onClick={shelf.onChange}
+                        className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2"
+                      >
+                        重新选目录
+                      </button>
+                    </div>
+                  </Row>
+                  <Row title="为什么会这样" desc="「重试」只是再打开一次目录；「重新授权」会请求浏览器重新给读写权限（必须由你点）。" last>
+                    <span className="text-[10.5px] text-ink-3">目录名：{shelf.where || '未知'}</span>
                   </Row>
                 </Section>
               ) : null}

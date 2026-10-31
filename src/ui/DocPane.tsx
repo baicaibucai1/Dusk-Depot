@@ -11,7 +11,7 @@ import {
 import type { Host } from '../core/ports/host'
 import { hasImage, putImage } from './markdown/imageStore'
 import { labelOf, nameOf } from '../core/model/path'
-import { previewOf } from '../core/model/fileKind'
+import { kindOf, previewOf } from '../core/model/fileKind'
 import { ImageViewer } from './viewers/ImageViewer'
 import { PdfViewer } from './viewers/PdfViewer'
 import { FormatBar } from './FormatBar'
@@ -24,6 +24,7 @@ import { TableEditor } from './TableEditor'
 import { BlockView, JumpContext, TaskContext, type JumpKind } from './markdown/render'
 import { LinkDialog } from './LinkDialog'
 import { MathDialog } from './MathDialog'
+import { EpubNotice } from './EpubNotice'
 import type { EditorContext } from './editor/CodeEditor'
 import type { EditorHandle } from './editor/CodeEditor'
 import { IconBook, IconCode, IconPanelRight, IconPen, IconSplit } from './icons'
@@ -76,6 +77,12 @@ type Props = {
   onNoteInfo?: (dir: string, info: import('./NoteEditor').NoteInfo) => void
   /** 拖进来的东西这个位置不收 —— 交给外层提示 */
   onNotice?: (text: string) => void
+  /** 仓库里打开的 EPUB：加进书架 / 切到书架 */
+  onAddToShelf?: (path: string) => void
+  onOpenShelf?: () => void
+  shelfCanAdd?: boolean
+  shelfBusy?: boolean
+  shelfReason?: string
 }
 
 /* 三档，照 Obsidian 那套：阅读（不可编辑）／编写（实时预览）／原代码（不渲染） */
@@ -107,6 +114,11 @@ export function DocPane({
   noteDir,
   onNoteInfo,
   onNotice,
+  onAddToShelf,
+  onOpenShelf,
+  shelfCanAdd,
+  shelfBusy,
+  shelfReason,
 }: Props) {
   // 允许用 ?mode=read|preview|source 直接开在某一档 —— 分享链接和截图验证都用得上
   const [mode, setMode] = useState<Mode>(() => {
@@ -237,6 +249,9 @@ export function DocPane({
 
   /** 这一栏打开的是图片 / PDF 时走只读预览，不进编辑器那条路 */
   const preview = active ? previewOf(active) : null
+  /** EPUB 也一样：文件区不读它，给一条去书架的说明 */
+  const epubDoc = active ? kindOf(active) === 'epub' : false
+  const readOnlyDoc = Boolean(preview) || epubDoc
 
   /** 光标上下文：在不在表格里、当前是几级标题 */
   const [ctx, setCtx] = useState<EditorContext>({ inTable: false, heading: null })
@@ -358,7 +373,7 @@ export function DocPane({
       </header>
 
       {/* 格式化工具条：正文顶上那一排。阅读模式里没有 —— 那儿不可编辑 */}
-      {active && !preview && mode !== 'read' && !noteDir ? (
+      {active && !readOnlyDoc && mode !== 'read' && !noteDir ? (
         <FormatBar
           disabled={!active}
           open={barOpen}
@@ -393,9 +408,9 @@ export function DocPane({
 
       <div
         className={noteDir ? 'hidden' : 'min-h-0 flex-1'}
-        data-drop-zone={preview ? undefined : 'editor'}
+        data-drop-zone={readOnlyDoc ? undefined : 'editor'}
         onPasteCapture={(e) => {
-          if (preview) return
+          if (readOnlyDoc) return
           const files = Array.from(e.clipboardData?.files ?? [])
           if (files.length === 0) return
           void takeFiles(files).then((handled) => {
@@ -406,14 +421,14 @@ export function DocPane({
           })
         }}
         onDragOver={(e) => {
-          if (preview) return
+          if (readOnlyDoc) return
           if (e.dataTransfer?.types.includes('Files')) {
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
           }
         }}
         onDrop={(e) => {
-          if (preview) return
+          if (readOnlyDoc) return
           const files = Array.from(e.dataTransfer?.files ?? [])
           if (files.length === 0) return
           void takeFiles(files).then((handled) => {
@@ -428,6 +443,15 @@ export function DocPane({
           <ImageViewer host={host} path={active} />
         ) : active && preview === 'pdf' ? (
           <PdfViewer host={host} path={active} />
+        ) : active && epubDoc ? (
+          <EpubNotice
+            path={active}
+            canAdd={Boolean(shelfCanAdd && onAddToShelf)}
+            busy={Boolean(shelfBusy)}
+            reason={shelfReason}
+            onAdd={() => onAddToShelf?.(active)}
+            onOpenShelf={() => onOpenShelf?.()}
+          />
         ) : !active ? (
           <div className="grid h-full place-items-center px-8">
             <div className="text-center">
@@ -554,7 +578,7 @@ export function DocPane({
         />
       ) : null}
 
-      {noteDir || preview ? null : <footer className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t border-line pr-2 pl-3 text-[11px] text-ink-3">
+      {noteDir || readOnlyDoc ? null : <footer className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t border-line pr-2 pl-3 text-[11px] text-ink-3">
 
         <span className="ml-auto whitespace-nowrap tabular-nums">{text.length} 字</span>
 
