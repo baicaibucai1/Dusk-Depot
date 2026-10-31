@@ -407,7 +407,7 @@ export function DocPane({
       ) : null}
 
       <div
-        className={noteDir ? 'hidden' : 'min-h-0 flex-1'}
+        className={noteDir ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}
         data-drop-zone={readOnlyDoc ? undefined : 'editor'}
         onPasteCapture={(e) => {
           if (readOnlyDoc) return

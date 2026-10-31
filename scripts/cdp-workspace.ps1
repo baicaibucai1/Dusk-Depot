@@ -90,7 +90,7 @@ Start-Sleep -Milliseconds 2200
 [void](Eval 'window.__errs = []; window.addEventListener("error", (e) => window.__errs.push(String(e.message || e.error))); "ok"')
 
 Write-Host 'A. 四区结构'
-Check '左侧导航条宽 48' ((W 'nav[aria-label="功能导航"]') -eq 48) "w=$(W 'nav[aria-label=\"功能导航\"]')"
+Check '左侧导航条宽 64' ((W 'nav[aria-label="功能导航"]') -eq 64) "w=$(W 'nav[aria-label=\"功能导航\"]')"
 Check '导航条 3 个入口（文件/书架/设置）' ((Eval '[...document.querySelectorAll("nav[aria-label=\"功能导航\"] button")].map((b) => b.getAttribute("aria-label")).join("/")') -eq '文件/书架/设置') "got=$(Eval '[...document.querySelectorAll("nav[aria-label=\"功能导航\"] button")].map((b) => b.getAttribute("aria-label")).join("/")')"
 Check '默认选中「文件」' ((Eval 'document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]").getAttribute("aria-label")') -eq '文件') "got=$(Eval 'document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]") ? document.querySelector("nav[aria-label=\"功能导航\"] button[aria-pressed=true]").getAttribute("aria-label") : "none"')"
 $treeW = W 'section[aria-label="文件与工具"]'
@@ -195,7 +195,7 @@ Check '1100 宽：目录栏仍在' ((W 'section[aria-label="文件与工具"]') 
 [void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 880; height = 900; deviceScaleFactor = 1; mobile = $false })
 Start-Sleep -Milliseconds 700
 Check '880 宽：目录栏也收起' ((W 'section[aria-label="文件与工具"]') -eq 0) "w=$(W 'section[aria-label=\"文件与工具\"]')"
-Check '880 宽：导航条还在' ((W 'nav[aria-label="功能导航"]') -eq 48) "w=$(W 'nav[aria-label=\"功能导航\"]')"
+Check '880 宽：导航条还在' ((W 'nav[aria-label="功能导航"]') -eq 64) "w=$(W 'nav[aria-label=\"功能导航\"]')"
 Check '880 宽：编辑器仍在且无横向溢出' ([int](Eval '(() => { const m = document.querySelector("main[data-active-path]"); return m && m.getBoundingClientRect().width > 200 && document.documentElement.scrollWidth <= window.innerWidth + 1 })()') -eq 1) "pane=$(Eval 'document.querySelector("main[data-active-path]")?.getBoundingClientRect().width') scroll=$(Eval 'document.documentElement.scrollWidth')"
 [void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 1440; height = 900; deviceScaleFactor = 1; mobile = $false })
 Start-Sleep -Milliseconds 700

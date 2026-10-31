@@ -373,6 +373,34 @@ Write-Host ('  [1024 阅读] ' + (Eval "(() => { const m = document.querySelecto
 [void](Send-Cdp 'Emulation.clearDeviceMetricsOverride' @{})
 Start-Sleep -Milliseconds 500
 
+Write-Host ''
+Write-Host 'D2. 鼠标翻页：点右侧 / 点左侧 / 滚轮'
+$readCfi = '(() => { try { return JSON.parse(window.__files["书库/library.json"].text).books.find((b) => b.title === "三体").cfi || "" } catch { return "" } })()'
+$cfiM0 = Eval $readCfi
+$fr = Eval "(() => { const f = document.querySelector('[data-dd-reader] iframe'); if (!f) return '0,0,0,0'; const q = f.getBoundingClientRect(); return q.left + ',' + q.top + ',' + q.width + ',' + q.height })()"
+$fp = $fr.Split(',')
+$fl = [double]$fp[0]; $ft = [double]$fp[1]; $fw = [double]$fp[2]; $fh = [double]$fp[3]
+
+# 鼠标移到右侧：翻页提示（箭头）浮出来
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = $fl + $fw * 0.85; y = $ft + $fh * 0.5; button = 'none' })
+Start-Sleep -Milliseconds 400
+Check '鼠标移到右侧出现翻页提示' ((Num 'document.querySelectorAll("[data-dd-turn-zone]").length') -eq 1) "n=$(Num 'document.querySelectorAll("[data-dd-turn-zone]").length')"
+
+Click ($fl + $fw * 0.85) ($ft + $fh * 0.5)
+Start-Sleep -Milliseconds 1500
+$cfiM1 = Eval $readCfi
+Check '点右侧翻到下一屏' ([bool](($cfiM1 -match 'epubcfi') -and ($cfiM1 -ne $cfiM0))) "a=$cfiM0 b=$cfiM1"
+
+Click ($fl + $fw * 0.15) ($ft + $fh * 0.5)
+Start-Sleep -Milliseconds 1500
+$cfiM2 = Eval $readCfi
+Check '点左侧翻回上一屏' ([bool]($cfiM2 -ne $cfiM1)) "b=$cfiM1 c=$cfiM2"
+
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseWheel'; x = $fl + $fw * 0.5; y = $ft + $fh * 0.5; deltaX = 0; deltaY = 260 })
+Start-Sleep -Milliseconds 1500
+$cfiM3 = Eval $readCfi
+Check '滚轮也能翻页' ([bool]($cfiM3 -ne $cfiM2)) "c=$cfiM2 d=$cfiM3"
+
 Key 'ArrowRight' 39
 Start-Sleep -Milliseconds 1300
 $cfi1 = Eval '(() => { try { return JSON.parse(window.__files["书库/library.json"].text).books.find((b) => b.title === "三体").cfi || "" } catch { return "" } })()'

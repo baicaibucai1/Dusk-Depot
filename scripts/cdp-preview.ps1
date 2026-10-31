@@ -58,6 +58,13 @@ function ClickRow([string]$text) {
   Click ([double]$p[0] + 20) ([double]$p[1] + [double]$p[3] / 2)
   return $true
 }
+$shots = Join-Path $PSScriptRoot '..\.workbuddy\shots\2026-10-31'
+New-Item -ItemType Directory -Force -Path $shots | Out-Null
+function Shot([string]$name) {
+  $r = Send-Cdp 'Page.captureScreenshot' @{ format = 'png'; captureBeyondViewport = $false }
+  [IO.File]::WriteAllBytes((Join-Path $shots "$name.png"), [Convert]::FromBase64String($r.result.data))
+  Write-Host "  shot $name"
+}
 function ClickIn([string]$scope, [string]$label) {
   return (Eval "(() => { const root = document.querySelector('$scope'); if (!root) return false; const b = [...root.querySelectorAll('button')].find((x) => (x.getAttribute('aria-label') || '') === '$label'); if (!b) return false; b.click(); return true })()")
 }
@@ -169,33 +176,93 @@ Check '实际大小 = 100%' ([bool]($z2 -match '100%')) "text=$z2"
 $z3 = Eval 'document.querySelector("[data-dd-image]").innerText.replace(/\n/g, " / ")'
 Check '回到适应窗口' ([bool]($z3 -match '适应')) "text=$z3"
 
-Write-Host 'C. 打开 PDF：页数、翻页、缩放、文本层'
+Write-Host 'B2. Markdown 编辑器高度（DocPane 容器改过 flex，别把编辑器压塌）'
+if (-not (ClickRow '笔记')) { Write-Host 'FAIL 点不到笔记'; $fail++ }
+Start-Sleep -Milliseconds 1400
+$cmH = Num "Math.round(document.querySelector('.cm-editor')?.getBoundingClientRect().height ?? 0)"
+Check 'CodeMirror 撑满内容区（> 400）' ($cmH -gt 400) "h=$cmH"
+Shot 'md-1440'
+
+Write-Host 'C. 打开 PDF：连续多页、页码、文本层'
 Check '点「文档」打开 PDF' (ClickRow '文档.pdf') ''
 Start-Sleep -Milliseconds 2600
 $pdfN = Num 'document.querySelectorAll("[data-dd-pdf]").length'
 Check '出现 PDF 查看器' ($pdfN -eq 1) "n=$pdfN"
 $pdfText = Eval 'document.querySelector("[data-dd-pdf]") ? document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ") : "none"'
 Check '页码显示 1 / 2' ([bool]($pdfText -match '1 / 2')) "text=$pdfText"
-$cw = Num 'document.querySelector("[data-dd-pdf] canvas") ? document.querySelector("[data-dd-pdf] canvas").width : -1'
-Check 'canvas 画出来了（宽 > 100）' ($cw -gt 100) "w=$cw"
+$pageBoxes = Num 'document.querySelectorAll("[data-dd-pdf] [data-page-no]").length'
+Check '两页排在同一条滚动流里（不是单页翻）' ($pageBoxes -eq 2) "n=$pageBoxes"
+$cw = Num 'document.querySelectorAll("[data-dd-pdf] [data-page-no=\"1\"] canvas")[0]?.width ?? 0'
+Check '第 1 页 canvas 画出来了（宽 > 100）' ($cw -gt 100) "w=$cw"
 $spans = Num 'document.querySelectorAll("[data-dd-pdf-text] span").length'
 Check '文本层有字（可选）' ($spans -ge 1) "n=$spans"
 $sel = Eval '(() => { const box = document.querySelector("[data-dd-pdf-text]"); if (!box) return ""; const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); const t = s.toString(); s.removeAllRanges(); return t })()'
 Check '文本真的能选中（selection 非空）' ([bool]("$sel" -match '\S')) "sel=$sel"
 
-[void](ClickIn '[data-dd-pdf]' '下一页'); Start-Sleep -Milliseconds 2400
+Shot 'pdf-pages-1440'
+
+Write-Host 'C2. 滚轮滚动 → 第 2 页自己滚进来，页码跟着走'
+$diag = Eval "(() => { const el = document.querySelector('[data-dd-pdf]').lastElementChild; if (!el) return 'none'; const q = el.getBoundingClientRect(); return el.tagName + '.' + el.className + ' | sh=' + el.scrollHeight + ' ch=' + el.clientHeight + ' top=' + el.scrollTop + ' ov=' + getComputedStyle(el).overflowY + ' rect=' + Math.round(q.left) + ',' + Math.round(q.top) + ',' + Math.round(q.width) + ',' + Math.round(q.height) })()"
+Write-Host ('   [diag] ' + $diag)
+
+$r = Eval "(() => { const el = document.querySelector('[data-dd-pdf]').lastElementChild; const q = el.getBoundingClientRect(); return q.left + ',' + q.top + ',' + q.width + ',' + q.height })()"
+$p = $r.Split(',')
+$mx = [double]$p[0] + [double]$p[2] / 2
+$my = [double]$p[1] + [double]$p[3] / 2
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = $mx; y = $my; button = 'none' })
+for ($i = 0; $i -lt 4; $i++) {
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseWheel'; x = $mx; y = $my; deltaX = 0; deltaY = 420 })
+  Start-Sleep -Milliseconds 160
+}
+Start-Sleep -Milliseconds 2200
+$scrolled = Num "Math.round(document.querySelector('[data-dd-pdf]').lastElementChild.scrollTop)"
+Check '滚轮能把长页滚下去（scrollTop > 0）' ($scrolled -gt 40) "top=$scrolled"
 $pdfText2 = Eval 'document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ")'
-Check '翻到第 2 页' ([bool]($pdfText2 -match '2 / 2')) "text=$pdfText2"
-$lt = Eval 'document.querySelector("[data-dd-pdf-text]") ? document.querySelector("[data-dd-pdf-text]").textContent : "none"'
-Check '第 2 页文本层跟着换了' ([bool]($lt -match 'Page 2')) "text=$lt"
-[void](ClickIn '[data-dd-pdf]' '实际大小'); Start-Sleep -Milliseconds 1200
-$w1 = Num 'Math.round(document.querySelector("[data-dd-pdf] canvas").getBoundingClientRect().width)'
-[void](ClickIn '[data-dd-pdf]' '放大'); Start-Sleep -Milliseconds 1400
-$w2 = Num 'Math.round(document.querySelector("[data-dd-pdf] canvas").getBoundingClientRect().width)'
+Check '滚到第 2 页时页码变 2 / 2' ([bool]($pdfText2 -match '2 / 2')) "text=$pdfText2"
+$lt = Eval 'document.querySelector("[data-page-no=\"2\"] [data-dd-pdf-text]")?.textContent ?? "none"'
+Check '第 2 页文本层跟着渲染' ([bool]($lt -match 'Page 2')) "text=$lt"
+
+Write-Host 'C3. 缩放：适合宽度 / 放大 / 滑块 / 100%'
+[void](ClickIn '[data-dd-pdf]' '实际大小'); Start-Sleep -Milliseconds 1400
+$w1 = Num 'Math.round(document.querySelector("[data-page-no=\"2\"] canvas")?.getBoundingClientRect().width ?? 0)'
+[void](ClickIn '[data-dd-pdf]' '放大'); Start-Sleep -Milliseconds 1600
+$w2 = Num 'Math.round(document.querySelector("[data-page-no=\"2\"] canvas")?.getBoundingClientRect().width ?? 0)'
 Check '放大后画布变宽' ($w2 -gt $w1) "$w1 → $w2"
-[void](ClickIn '[data-dd-pdf]' '适合宽度'); Start-Sleep -Milliseconds 1100
+
+$slider = Eval @'
+(() => {
+  const el = document.querySelector('.dd-range');
+  if (!el) return 'no-slider';
+  const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  set.call(el, '60');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  return 'ok';
+})()
+'@
+Start-Sleep -Milliseconds 1600
+$w3 = Num 'Math.round(document.querySelector("[data-page-no=\"2\"] canvas")?.getBoundingClientRect().width ?? 0)'
+$zoomText = Eval 'document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ")'
+Check '滑块能缩到 60%' (($slider -eq 'ok') -and [bool]($zoomText -match '60%')) "res=$slider text=$zoomText"
+Check '滑块缩放真的改变了画布宽度' ($w3 -lt $w2) "$w2 → $w3"
+Shot 'pdf-zoom-60'
+
+[void](ClickIn '[data-dd-pdf]' '适合宽度'); Start-Sleep -Milliseconds 1500
 $pdfText3 = Eval 'document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ")'
+$wFit = Num 'Math.round(document.querySelector("[data-page-no=\"2\"] canvas")?.getBoundingClientRect().width ?? 0)'
 Check '回到适合宽度' ([bool]($pdfText3 -match '适合')) "text=$pdfText3"
+Check '适合宽度下画布宽度回到容器内' ($wFit -gt $w3) "$w3 → $wFit"
+Shot 'pdf-pages-fit'
+
+Write-Host 'C4. 窄窗（1024×768）'
+[void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 1024; height = 768; deviceScaleFactor = 1; mobile = $false })
+Start-Sleep -Milliseconds 800
+Check '1024 下整页没有横向溢出' ((Eval 'document.documentElement.scrollWidth <= window.innerWidth') -eq $true) "sw=$(Eval 'document.documentElement.scrollWidth') vw=$(Eval 'window.innerWidth')"
+Check '1024 下滑块还在工具栏里' ((Num 'document.querySelectorAll("[data-dd-pdf] .dd-range").length') -eq 1) ''
+$toolbar = Eval "(() => { const t = document.querySelector('[data-dd-pdf]').firstElementChild; const q = t.getBoundingClientRect(); const last = t.lastElementChild.getBoundingClientRect(); return Math.round(q.right - last.right) })()"
+Check '1024 下缩放按钮没被挤出工具栏' ([int]$toolbar -ge 0) "rightGap=$toolbar"
+Shot 'pdf-1024'
+[void](Send-Cdp 'Emulation.clearDeviceMetricsOverride' @{})
+Start-Sleep -Milliseconds 500
 
 Write-Host 'D. 标签页：图片与 PDF 各占一个，切换内容对得上'
 $r = Eval '(() => { const b = [...document.querySelectorAll("[data-dd-files] button")].find((x) => x.textContent.includes("图.png")); if (!b) return ""; const q = b.getBoundingClientRect(); return q.left + "," + q.top })()'

@@ -10,8 +10,9 @@
  *   · 书里的外链不直接打开，先问一句；
  *   · 卸载时销毁 rendition / book，并断开所有监听。
  */
-import type { Book as EpubBook } from 'epubjs'
+import type { Book as EpubBook, Contents } from 'epubjs'
 import type { Rendition } from 'epubjs'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type TocItem, classifyEpubError, epubErrorMessage, openEpub } from '../../core/shelf/epub'
 import type { Book } from '../../core/shelf/library'
@@ -70,6 +71,16 @@ export function EpubReader({
   const [error, setError] = useState<string | null>(null)
   /* relocated 回调是挂载时注册的，读不到后来的 state —— 用一个 ref 记"位置表好了没" */
   const locReadyRef = useRef(false)
+  /** 鼠标停在左/右翻页区时给一个文字提示（只是提示，点击由 iframe 内监听处理） */
+  const [zone, setZone] = useState<'left' | 'right' | null>(null)
+  const zoneRef = useRef<'left' | 'right' | null>(null)
+  const setZoneSafe = useCallback((next: 'left' | 'right' | null) => {
+    if (zoneRef.current === next) return
+    zoneRef.current = next
+    setZone(next)
+  }, [])
+  /** 外层留白上滚轮的节流时间戳（必须在任何提前 return 之前，hooks 顺序不能变） */
+  const wheelAcc = useRef(0)
 
   const themeRef = useRef(settings.theme)
   themeRef.current = settings.theme
@@ -166,6 +177,78 @@ export function EpubReader({
           }
         }
         r.on('keydown', onKey)
+
+        /*
+         * 鼠标翻页。
+         *
+         * 书页在 iframe 里，父窗口收不到里面的 click / wheel，所以挂在
+         * `hooks.content` 上 —— 每次加载新章节都会重新执行一次，监听跟着新文档走。
+         *
+         * 三条规矩：
+         *   · 点链接、按钮、输入框不翻页（那是书自己的交互）；
+         *   · 刚才在选字（mousedown 时选区非空）就不翻，避免选到一半跳页；
+         *   · 滚轮翻页要节流 —— 触控板一次滑动会连发几十个 wheel 事件。
+         */
+        r.hooks.content.register((contents: Contents) => {
+          const win = contents.window
+          const doc = contents.document
+          if (!win || !doc) return
+
+          let hadSelection = false
+          let lastWheel = 0
+
+          const widthOf = () => win.innerWidth || doc.documentElement.clientWidth || 0
+
+          const onDown = () => {
+            try {
+              hadSelection = Boolean(win.getSelection()?.toString().trim())
+            } catch {
+              hadSelection = false
+            }
+          }
+
+          const onMove = (e: MouseEvent) => {
+            const w = widthOf()
+            if (!w) return
+            setZoneSafe(e.clientX < w * 0.3 ? 'left' : e.clientX > w * 0.7 ? 'right' : null)
+          }
+
+          const onLeave = () => setZoneSafe(null)
+
+          const onClick = (e: MouseEvent) => {
+            const t = e.target as HTMLElement | null
+            if (t?.closest?.('a, button, input, textarea, select, label')) return
+            if (hadSelection) return
+            const w = widthOf()
+            if (!w) return
+            if (e.clientX < w * 0.3) {
+              setZoneSafe(null)
+              void r.prev()
+            } else if (e.clientX > w * 0.7) {
+              setZoneSafe(null)
+              void r.next()
+            }
+          }
+
+          const onWheel = (e: WheelEvent) => {
+            if (e.ctrlKey || e.metaKey) return
+            const dy = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+            if (Math.abs(dy) < 8) return
+            e.preventDefault()
+            const now = Date.now()
+            if (now - lastWheel < 420) return
+            lastWheel = now
+            setZoneSafe(null)
+            if (dy > 0) void r.next()
+            else void r.prev()
+          }
+
+          doc.addEventListener('mousedown', onDown, true)
+          doc.addEventListener('mousemove', onMove, { passive: true })
+          doc.addEventListener('mouseleave', onLeave, { passive: true })
+          doc.addEventListener('click', onClick)
+          doc.addEventListener('wheel', onWheel, { passive: false })
+        })
 
         // 先按 CFI 恢复；CFI 失效就退回章节，再退回百分比
         let shown = false
@@ -328,15 +411,45 @@ export function EpubReader({
     )
   }
 
+  /** 外壳上的滚轮（阅读区两侧的留白）：iframe 里的滚轮不会冒泡到这里，互不冲突 */
+  const onShellWheel = (e: React.WheelEvent) => {
+    const now = Date.now()
+    if (now - wheelAcc.current < 420) return
+    const dy = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+    if (Math.abs(dy) < 8) return
+    wheelAcc.current = now
+    if (dy > 0) void rendition.current?.next()
+    else void rendition.current?.prev()
+  }
+
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex min-h-0 flex-1 justify-center overflow-hidden" data-dd-reader>
+      <div
+        className="flex min-h-0 flex-1 justify-center overflow-hidden"
+        data-dd-reader
+        onWheel={onShellWheel}
+      >
         <div
           ref={host}
           className="h-full w-full"
           style={{ maxWidth: settings.width, background: settings.theme === 'sepia' ? '#f6efe0' : settings.theme === 'dark' ? '#14201b' : '#fff' }}
         />
       </div>
+      {zone ? (
+        <div
+          aria-hidden
+          data-dd-turn-zone={zone}
+          className={[
+            'pointer-events-none absolute inset-y-0 z-10 flex w-14 items-center justify-center',
+            zone === 'left' ? 'left-0' : 'right-0',
+          ].join(' ')}
+        >
+          <span className="grid size-9 place-items-center rounded-full bg-ink/5 text-ink-3 backdrop-blur-[1px]">
+            {zone === 'left' ? <ChevronLeft className="size-5" /> : <ChevronRight className="size-5" />}
+          </span>
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-surface/70 text-[12.5px] text-ink-3">
           正在打开《{book.title}》…

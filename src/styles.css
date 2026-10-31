@@ -734,6 +734,43 @@
   background: rgba(14, 155, 102, 0.25);
 }
 
+/* 缩放滑块：细轨 + 绿色圆钮，进度用背景渐变画（见组件内联 style） */
+.dd-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.dd-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-green);
+  box-shadow: 0 1px 2px rgba(16, 35, 28, 0.22);
+  cursor: pointer;
+}
+
+.dd-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-green);
+  box-shadow: 0 1px 2px rgba(16, 35, 28, 0.22);
+  cursor: pointer;
+}
+
+.dd-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-green) 45%, transparent);
+  outline-offset: 4px;
+}
+
 /* ═══════════════════════════════════════════════════════════
  * 文档流（`.note` v2）—— Notion 式块编辑器的排版
  *
