@@ -364,6 +364,31 @@ Start-Sleep -Milliseconds 900
 $body = Eval 'document.querySelector("[data-dd-reader] iframe")?.contentDocument?.body?.innerText ?? ""'
 Check '正文里有第一章' ([bool]($body -match '地球往事')) "body=$($body.Substring(0,[Math]::Min(60,$body.Length)))"
 Check '右栏有目录' ([bool]((Eval 'document.querySelector("[aria-label=书籍目录与书签]")?.textContent') -match '第一章')) ''
+$diag = Eval @'
+(() => {
+  const f = document.querySelector('[data-dd-reader] iframe');
+  if (!f) return 'no-iframe';
+  const d = f.contentDocument, w = f.contentWindow;
+  const q = f.getBoundingClientRect();
+  const b = d.body;
+  const cs = w.getComputedStyle(b);
+  const hs = w.getComputedStyle(d.documentElement);
+  const p = d.querySelector('p');
+  const ps = p ? w.getComputedStyle(p) : null;
+  return JSON.stringify({
+    iframe: [Math.round(q.width), Math.round(q.height)],
+    htmlH: d.documentElement.scrollHeight,
+    bodyH: b.scrollHeight,
+    bodyLH: cs.lineHeight, bodyFS: cs.fontSize,
+    htmlLH: hs.lineHeight,
+    pLH: ps && ps.lineHeight, pFS: ps && ps.fontSize,
+    sheets: [...d.styleSheets].length,
+    lastRules: [...d.styleSheets].slice(-2).flatMap((s) => { try { return [...s.cssRules].slice(0, 6).map((r) => r.cssText.slice(0, 80)) } catch (e) { return ['x'] } })
+  });
+})()
+'@
+Write-Host ('   [reader] ' + $diag)
+
 
 Shot 'shelf-reader-1440'
 [void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 1024; height = 768; deviceScaleFactor = 1; mobile = $false })

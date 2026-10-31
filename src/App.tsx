@@ -224,7 +224,7 @@ async function openMemoryRepo() {
 
 /* 阅读器的显示偏好（设备级，跟书架目录无关） */
 const READER_KEY = 'dusk.reader.v1'
-const READER_DEFAULTS: ReaderSettings = { fontSize: 17, lineHeight: 1.85, width: 720, theme: 'light' }
+const READER_DEFAULTS: ReaderSettings = { fontSize: 17, lineHeight: 1.85, width: 720, theme: 'light', flow: 'paged' }
 
 function loadReaderSettings(): ReaderSettings {
   try {
@@ -236,6 +236,7 @@ function loadReaderSettings(): ReaderSettings {
       lineHeight: Math.min(2.4, Math.max(1.3, Number(v.lineHeight) || READER_DEFAULTS.lineHeight)),
       width: Math.min(980, Math.max(480, Number(v.width) || READER_DEFAULTS.width)),
       theme: v.theme === 'sepia' || v.theme === 'dark' ? v.theme : 'light',
+      flow: v.flow === 'scroll' ? 'scroll' : 'paged',
     }
   } catch {
     return { ...READER_DEFAULTS }

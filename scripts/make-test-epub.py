@@ -9,6 +9,7 @@
   三体.epub          正常书：EPUB 3，中文书名/作者，两章，一张 PNG 封面
   银河.epub          第二本正常书（不同内容哈希，测切书不串进度）
   基地.epub          第三本正常书（测"仓库 EPUB 加进书架"）
+  长夜.epub          长篇样书（8 章，测分页排版 / 滚动阅读）
   损坏.epub          不是 ZIP 的假货（测"打不开"）
   加密.epub          带 META-INF/encryption.xml 的假 DRM（测"不支持 DRM"）
 
@@ -139,6 +140,82 @@ def build(
             )
 
 
+def build_long(path: str, title: str = "长夜", author: str = "测试作者", uid: str = "long-book-0001") -> None:
+    """长篇样书：8 章、每章 12 段中文。
+
+    用来测分页排版和滚动阅读 —— 两章的短书一屏就放完了，看不出分栏/行距问题。
+    """
+    # 故意带一份"烂排版"CSS：行高压到 0.6、段落零边距。
+    # 真实世界里不少书就这么写，阅读器必须能把它压回来，否则字会叠在一起。
+    bad_css = "body { line-height: 0.55; margin: 0; }\np { line-height: 0.6; margin: 0.1em 0; }\n"
+
+    def long_chapter(title: str, body: str) -> str:
+        return f"""<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN">
+<head><meta charset="utf-8"/><title>{title}</title>
+<link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body>
+  <h1>{title}</h1>
+  {body}
+</body>
+</html>
+"""
+
+    chapters = []
+    for c in range(1, 9):
+        paras = "".join(
+            f"<p>第 {c} 章第 {i} 段。这是一段用来填满版面的中文正文，"
+            "它会占据好几行，从而暴露出分页时的列宽与行距问题。"
+            "如果把行高压得太小，这些字就会叠在一起，一眼就能看出来。</p>"
+            for i in range(1, 13)
+        )
+        chapters.append(long_chapter(f"第{c}章 长夜", paras))
+
+    items = "".join(
+        f'    <item id="c{c}" href="ch{c}.xhtml" media-type="application/xhtml+xml"/>\n'
+        for c in range(1, 9)
+    )
+    spine = "".join(f'    <itemref idref="c{c}"/>\n' for c in range(1, 9))
+    toc = "".join(f'      <li><a href="ch{c}.xhtml">第{c}章 长夜</a></li>\n' for c in range(1, 9))
+
+    opf = f"""<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:{uid}</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
+    <dc:language>zh-CN</dc:language>
+    <meta property="dcterms:modified">2026-10-31T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+{items}  </manifest>
+  <spine>
+{spine}  </spine>
+</package>
+"""
+    nav = f"""<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><meta charset="utf-8"/><title>目录</title></head>
+<body><nav epub:type="toc" id="toc"><h1>目录</h1><ol>
+{toc}    </ol></nav></body>
+</html>
+"""
+    container = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>
+"""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", container, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/content.opf", opf, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/nav.xhtml", nav, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/style.css", bad_css, compress_type=zipfile.ZIP_DEFLATED)
+        for i, body in enumerate(chapters, start=1):
+            z.writestr(f"OEBPS/ch{i}.xhtml", body, compress_type=zipfile.ZIP_DEFLATED)
+
+
 def build_drm(path: str) -> None:
     # 结构完整、只是资源被 AES 加密的"真 DRM"书：能被解包，但读不了正文
     build(path, drm=True)
@@ -162,6 +239,7 @@ def main() -> None:
         uid="3d7e2b1a-third-book",
         accent=(120, 70, 160),
     )
+    build_long(os.path.join(out, "长夜.epub"))
     build_drm(os.path.join(out, "加密.epub"))
     with open(os.path.join(out, "损坏.epub"), "wb") as f:
         f.write(b"this is not a zip file, just text pretending to be an epub" * 3)

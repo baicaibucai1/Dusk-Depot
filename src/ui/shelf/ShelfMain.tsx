@@ -280,6 +280,31 @@ function Prefs({
       <div className="fixed inset-0 z-20" onClick={onClose} />
       <div className="absolute top-10 right-2 z-30 w-[236px] rounded-xl border border-line bg-surface p-3 shadow-[0_12px_32px_rgba(16,35,28,0.14)]">
         <div className={row}>
+          <span className="text-[11.5px] text-ink-2">翻页方式</span>
+          <div className="flex overflow-hidden rounded-md border border-line">
+            {(
+              [
+                { id: 'paged', label: '左右翻页' },
+                { id: 'scroll', label: '滚动阅读' },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                aria-label={f.label}
+                aria-pressed={settings.flow === f.id}
+                onClick={() => onChange({ ...settings, flow: f.id })}
+                className={[
+                  'px-2 py-0.5 text-[10.5px] transition-colors',
+                  settings.flow === f.id ? 'bg-green text-white' : 'text-ink-2 hover:bg-surface-2',
+                ].join(' ')}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={row}>
           <span className="text-[11.5px] text-ink-2">字号</span>
           <div className="flex items-center gap-1">
             <button type="button" aria-label="减小字号" className="grid size-6 place-items-center rounded border border-line text-ink-2" onClick={() => onChange({ ...settings, fontSize: step(settings.fontSize, -1, 13, 24) })}>
