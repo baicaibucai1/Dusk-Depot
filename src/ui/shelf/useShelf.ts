@@ -115,6 +115,34 @@ function arrayBufferOf(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 }
 
+/**
+ * 清单坏掉重建后，书的 id 是 `pending-路径`。这种 id 不参与内容判重，
+ * 再导入同一本会被当成新书。这里在有清单可用之后补一次内容指纹：
+ * 只在启动时对**待定 id** 的书读一遍文件，正常书架没有额外开销。
+ */
+async function upgradePendingIds(host: Host, lib: Library): Promise<{ lib: Library; count: number }> {
+  const pending = lib.books.filter((b) => b.id.startsWith('pending-') && !b.trashedAt)
+  if (pending.length === 0) return { lib, count: 0 }
+  const ids = new Set(lib.books.map((b) => b.id))
+  let books = lib.books
+  let count = 0
+  for (const b of pending) {
+    try {
+      const bytes = await host.read(b.file)
+      if (bytes.length === 0) continue
+      const id = await hashBytes(bytes)
+      if (ids.has(id)) continue // 已经有同内容的书：保留这条待定记录，别把两本并成一本
+      ids.delete(b.id)
+      ids.add(id)
+      books = books.map((x) => (x.id === b.id ? { ...x, id } : x))
+      count += 1
+    } catch {
+      /* 读不出来就保留 pending id，至少书还在列表里 */
+    }
+  }
+  return { lib: count ? { ...lib, books } : lib, count }
+}
+
 function messageOf(e: unknown): string {
   if (e instanceof Error) return e.message
   return String(e)
@@ -295,6 +323,7 @@ export function useShelf() {
 
       let lib: Library
       let repaired = ''
+      let needWrite = false
       const parsed = parseLibrary(raw)
       if (!parsed.ok) {
         // 清单坏了：先备份，再从目录里真实存在的书重建 —— 书不能因为清单坏了就消失
@@ -327,6 +356,13 @@ export function useShelf() {
         if (added.length) {
           repaired = repaired || `在书架目录里发现 ${added.length} 本没有登记的书，已补进列表`
         }
+
+        const up = await upgradePendingIds(s.host, lib)
+        if (up.count) {
+          lib = up.lib
+          repaired = `${repaired ? `${repaired}；` : ''}已为 ${up.count} 本书补上内容指纹（以后导入同一本会被认出来）`
+        }
+        needWrite = added.length > 0 || up.count > 0
       } catch (e) {
         repaired = repaired || `列书架目录失败：${messageOf(e)}`
       }
@@ -348,11 +384,11 @@ export function useShelf() {
       setStatus('ready')
       if (repaired) say('warn', repaired)
 
-      // 补登记的新书要落盘；失败也要让用户看见（不是只写 console）
-      if (lib.books.some((b) => b.id.startsWith('pending-')) || repaired.includes('补进列表')) {
+      // 补登记 / 补指纹要落盘；失败也要让用户看见（不是只写 console）
+      if (needWrite) {
         pendingRef.current = { gen, host: s.host, lib }
         const ok = await writePending()
-        if (!ok) say('warn', '有新增书目还没写进书架清单，页面底部可以重试保存')
+        if (!ok) say('warn', '书目更新还没写进书架清单，页面底部可以重试保存')
       }
       return true
     },
