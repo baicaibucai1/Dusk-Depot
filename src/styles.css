@@ -714,6 +714,9 @@
 .dd-pdf-text {
   position: absolute;
   inset: 0;
+  /* pdf.js 的 setLayerDimensions 用这两个变量取整容器尺寸，没定义时整条声明会失效 */
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
   overflow: clip;
   line-height: 1;
   text-align: initial;
@@ -729,6 +732,14 @@
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
+  /*
+   * ⚠️ 这两条是 pdf.js 文本层的命根子，它自己只往 span 上写
+   *    `--font-height` / `--scale-x` / `--rotate` 变量，字号与拉伸全靠样式表算。
+   * 漏掉时 span 用浏览器默认 16px —— 页面上的字是 34px，选区框只有一半高，
+   * 看起来就是"选中高亮和文字对不上、字像叠了一层"。
+   */
+  font-size: calc(var(--font-height, 1px) * var(--total-scale-factor, 1));
+  transform: rotate(var(--rotate, 0deg)) scaleX(var(--scale-x, 1));
 }
 .dd-pdf-text ::selection {
   background: rgba(14, 155, 102, 0.25);

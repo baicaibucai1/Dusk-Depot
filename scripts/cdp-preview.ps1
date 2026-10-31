@@ -199,6 +199,50 @@ Check '文本层有字（可选）' ($spans -ge 1) "n=$spans"
 $sel = Eval '(() => { const box = document.querySelector("[data-dd-pdf-text]"); if (!box) return ""; const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); const t = s.toString(); s.removeAllRanges(); return t })()'
 Check '文本真的能选中（selection 非空）' ([bool]("$sel" -match '\S')) "sel=$sel"
 
+# 选中整页文字：文本层的位置/字号必须和 canvas 严丝合缝
+$selInfo = Eval @'
+(() => {
+  const tb = document.querySelector('[data-page-no="1"] .dd-pdf-text');
+  const c = document.querySelector('[data-page-no="1"] canvas');
+  if (!tb || !c) return 'none';
+  const r = document.createRange();
+  r.selectNodeContents(tb);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  const cr = c.getBoundingClientRect();
+  const tr = tb.getBoundingClientRect();
+  const sp = tb.querySelector('span');
+  const sr = sp ? sp.getBoundingClientRect() : null;
+  const cs = sp ? getComputedStyle(sp) : null;
+  return JSON.stringify({
+    canvas: [Math.round(cr.width), Math.round(cr.height)],
+    textLayer: [Math.round(tr.width), Math.round(tr.height)],
+    span: sr ? [Math.round(sr.left - cr.left), Math.round(sr.top - cr.top), Math.round(sr.width), Math.round(sr.height)] : null,
+    font: cs ? cs.fontSize : '',
+    fontHeight: sp ? sp.style.getPropertyValue('--font-height') : '',
+    tsf: getComputedStyle(tb).getPropertyValue('--total-scale-factor'),
+  });
+})()
+'@
+Write-Host ('   [select] ' + $selInfo)
+$fontOk = Eval @'
+(() => {
+  const tb = document.querySelector('[data-page-no="1"] .dd-pdf-text');
+  const sp = tb.querySelector('span');
+  if (!sp) return 'no-span';
+  const cs = getComputedStyle(sp);
+  const h = parseFloat(sp.style.getPropertyValue('--font-height')) || 0;
+  const tsf = parseFloat(cs.getPropertyValue('--total-scale-factor')) || 1;
+  const fs = parseFloat(cs.fontSize) || 0;
+  return JSON.stringify({ want: Math.round(h * tsf * 100) / 100, got: fs, ok: Math.abs(fs - h * tsf) < 0.5 });
+})()
+'@
+Write-Host ('   [font] ' + $fontOk)
+$f = $fontOk | ConvertFrom-Json
+Check '文本层字号跟页面字号一致（不是默认 16px）' ($f.ok -eq $true) "want=$($f.want) got=$($f.got)"
+Check '选中的字块高度接近字形高度' ([bool]([double]$f.got -gt 24)) "size=$($f.got)"
+
 Shot 'pdf-pages-1440'
 
 Write-Host 'C2. 滚轮滚动 → 第 2 页自己滚进来，页码跟着走'

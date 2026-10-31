@@ -460,9 +460,7 @@ function PdfPage({
         if (dead) return
 
         textBox.replaceChildren()
-        textBox.style.width = `${Math.floor(logical.width)}px`
-        textBox.style.height = `${Math.floor(logical.height)}px`
-        // pdf.js 的文本层靠这个变量换算字号与位置
+        // pdf.js 的文本层靠这个变量换算字号，也靠它算容器宽度
         textBox.style.setProperty('--total-scale-factor', String(scale))
 
         const pdfjs = await import('pdfjs-dist')
@@ -473,6 +471,19 @@ function PdfPage({
           viewport: logical,
         })
         layer = l
+        /*
+         * ⚠️ TextLayer 的构造函数会把容器的 width/height 改成
+         *   `round(down, var(--total-scale-factor) * 页宽, var(--scale-round-x))`
+         * 这是个 CSS 函数，`--scale-round-x` 没定义时整条声明无效 → 尺寸退化成
+         *   "跟随父级"。
+         * 而 span 的位置是**百分比**（left/top 百分比），父级高度一变（比如后台补齐
+         * 了每页真实尺寸），整层文字就被拉伸，与 canvas 错位 —— 越往下偏得越多，
+         * 选中时高亮就和字对不上。
+         *
+         * 所以这里在构造之后**用 px 覆盖回去**，把文本层的尺寸钉死成和 canvas 一致。
+         */
+        textBox.style.width = `${Math.floor(logical.width)}px`
+        textBox.style.height = `${Math.floor(logical.height)}px`
         await l.render()
         if (dead) return
 
