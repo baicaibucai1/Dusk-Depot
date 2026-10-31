@@ -32,6 +32,8 @@ type Props = {
   dir: string
   doc: NoteDoc
   onInfo?: (dir: string, info: { outline: { level: number; text: string }[]; text: string }) => void
+  /** v1 旧画布：只读打开，不写盘、不改格式 */
+  readOnly?: boolean
 }
 
 const ATTACH_DIR = '附件'
@@ -54,7 +56,7 @@ function insertImageAt(view: EditorView, pos: number, src: string, alt: string):
   view.dispatch(view.state.tr.insert(pos, image.create({ id: `b${max + 1}`, src, alt })))
 }
 
-export function CanvasNote({ host, dir, doc, onInfo }: Props) {
+export function CanvasNote({ host, dir, doc, onInfo, readOnly = false }: Props) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [title, setTitle] = useState(doc.meta.title)
@@ -96,7 +98,7 @@ export function CanvasNote({ host, dir, doc, onInfo }: Props) {
       Link.configure({ openOnClick: false, autolink: false }),
     ],
     content: blocksToPm(doc) as never,
-    editable: true,
+    editable: !readOnly,
     editorProps: {
       attributes: { class: 'dd-note-canvas' },
 
@@ -236,12 +238,14 @@ export function CanvasNote({ host, dir, doc, onInfo }: Props) {
   /* ── 编辑 → 防抖保存 ── */
   useEffect(() => {
     if (!editor) return
-    const onUpdate = () => scheduleSave.current()
+    const onUpdate = () => {
+      if (!readOnly) scheduleSave.current()
+    }
     editor.on('update', onUpdate)
     return () => {
       editor.off('update', onUpdate)
     }
-  }, [editor])
+  }, [editor, readOnly])
 
   /* ── 图片块换图：node view 抛上来的事件 ── */
   useEffect(() => {
@@ -397,6 +401,7 @@ export function CanvasNote({ host, dir, doc, onInfo }: Props) {
 
         <input
           value={title}
+          readOnly={readOnly}
           onChange={(e) => onTitleChange(e.target.value)}
           aria-label="文档标题"
           placeholder="无标题"
@@ -405,6 +410,7 @@ export function CanvasNote({ host, dir, doc, onInfo }: Props) {
 
         <EditorContent editor={editor} />
 
+        {readOnly ? null : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="text-[11px] text-ink-3">添加块</span>
           {BLOCK_TYPES.map((t) => (
@@ -424,6 +430,7 @@ export function CanvasNote({ host, dir, doc, onInfo }: Props) {
             </button>
           ))}
         </div>
+        )}
 
         {error ? (
           <p className="mt-4 text-[11.5px] text-red-600" role="alert">

@@ -14,6 +14,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { decodeBytes } from '../core/model/text'
 import { type NoteDoc, inferNoteMarker, parseNoteDoc, readNoteMarker } from '../core/note/format'
 import { type FlowDoc, parseFlowDoc } from '../core/note/flowDoc'
+import { BOARD_ASSETS, type BoardDoc, parseBoardDoc } from '../core/note/board'
 import type { FlowBlock } from '../core/note/flow'
 import type { Host } from '../core/ports/host'
 import { putImage, resolveImage } from './markdown/imageStore'
@@ -21,6 +22,7 @@ import type { JumpKind } from './markdown/render'
 
 const CanvasNote = lazy(() => import('./note/CanvasNote').then((m) => ({ default: m.CanvasNote })))
 const FlowNote = lazy(() => import('./note/FlowNote').then((m) => ({ default: m.FlowNote })))
+const BoardNote = lazy(() => import('./note/BoardNote').then((m) => ({ default: m.BoardNote })))
 
 export type NoteInfo = {
   /** 块大纲：标题块用 level，其它块按正文条目 */
@@ -41,6 +43,7 @@ type Props = {
 type Loaded =
   | { kind: 'canvas'; doc: NoteDoc }
   | { kind: 'flow'; doc: FlowDoc }
+  | { kind: 'board'; doc: BoardDoc; warnings: string[] }
 
 /** 文档流里图片可能藏在分栏里，挨个找出来 */
 function flowImages(blocks: Record<string, FlowBlock>): string[] {
@@ -69,11 +72,24 @@ export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
         for (const e of entries) {
           if (e.kind !== 'file') continue
           if (!e.path.startsWith(`${dir}/`)) continue
+          // v3 的 assets/ 是二进制：只按需读，别在打开文档时整包解码成字符串
+          if (e.path.startsWith(`${dir}/${BOARD_ASSETS}/`)) continue
           files[e.path] = decodeBytes(await host.read(e.path))
         }
         if (!alive) return
 
         const marker = readNoteMarker(dir, files) ?? inferNoteMarker(dir, files)
+
+        if (marker.version >= 3) {
+          const parsed = parseBoardDoc(dir, files)
+          if (!parsed) {
+            setError('这个目录不是 .note 文档（缺标记文件）')
+            return
+          }
+          if (!alive) return
+          setLoaded({ kind: 'board', doc: parsed.doc, warnings: parsed.warnings })
+          return
+        }
 
         if (marker.layoutMode === 'flow') {
           const doc = parseFlowDoc(dir, files)
@@ -124,10 +140,33 @@ export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
 
   const body = useMemo(() => {
     if (!loaded) return null
-    if (loaded.kind === 'flow') {
-      return <FlowNote key={dir} host={host} dir={dir} doc={loaded.doc} onInfo={onInfo} onJump={onJump} notes={notes} />
+    if (loaded.kind === 'board') {
+      return (
+        <BoardNote
+          key={dir}
+          host={host}
+          dir={dir}
+          doc={loaded.doc}
+          warnings={loaded.warnings}
+          onInfo={onInfo}
+        />
+      )
     }
-    return <CanvasNote key={dir} host={host} dir={dir} doc={loaded.doc} onInfo={onInfo} />
+    if (loaded.kind === 'flow') {
+      return (
+        <FlowNote
+          key={dir}
+          host={host}
+          dir={dir}
+          doc={loaded.doc}
+          onInfo={onInfo}
+          onJump={onJump}
+          notes={notes}
+          readOnly
+        />
+      )
+    }
+    return <CanvasNote key={dir} host={host} dir={dir} doc={loaded.doc} onInfo={onInfo} readOnly />
   }, [loaded, host, dir, onInfo, onJump, notes])
 
   if (error) {
@@ -144,5 +183,24 @@ export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
     )
   }
 
-  return <Suspense fallback={null}>{body}</Suspense>
+  if (loaded.kind === 'board') {
+    return <Suspense fallback={null}>{body}</Suspense>
+  }
+
+  // v1 / v2 只读：格式冻结，不再接受编辑；新建的笔记一律 v3 纵向画布
+  return (
+    <div className="dd-legacy-readonly flex h-full min-h-0 flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line bg-surface-2/60 px-3 text-[10.5px] text-ink-3">
+        <span className="rounded bg-surface px-1.5 py-[1px] font-mono text-[10px]">
+          {loaded.kind === 'canvas' ? 'v1 画布' : 'v2 文档流'}
+        </span>
+        <span>旧版笔记只读打开；不会被自动迁移或改写</span>
+        <span className="flex-1" />
+        <span>新建的笔记使用 v3 纵向画布</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        <Suspense fallback={null}>{body}</Suspense>
+      </div>
+    </div>
+  )
 }

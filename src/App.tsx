@@ -5,7 +5,7 @@ import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
 import { isEpubPath, kindOf, previewOf } from './core/model/fileKind'
 import { isNoteDocPath } from './core/note/format'
-import { emptyFlowDoc, flowDocFiles } from './core/note/flowDoc'
+import { BOARD_ASSETS, boardFiles, emptyBoardDoc } from './core/note/board'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
 import { parentOf, stemOf } from './core/model/path'
 import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/rename'
@@ -917,7 +917,8 @@ export function App() {
   /**
    * 新建一篇**文档流** `.note`（v2）。
    *
-   * 直接写盘，不走 files 内存表：`.note` 是一个目录，里面的块文件不该出现在文件树里
+   * 新建的 `.note` 一律是 v3（纵向块画布）。直接写盘，不走 files 内存表：
+   * `.note` 是一个目录，里面的块文件不该出现在文件树里
    * （树里它只作为一篇文档出现）。写失败就什么都不加，别留半个文档。
    */
   function createNoteDoc(dir: string): string | null {
@@ -925,8 +926,8 @@ export function App() {
     const host = phase.host
     const base = dir ? `${dir}/` : ''
     const path = uniquePath(`${base}未命名.note`, taken)
-    const doc = emptyFlowDoc('未命名')
-    const files = flowDocFiles(path, doc)
+    const doc = emptyBoardDoc('未命名')
+    const files = boardFiles(path, doc)
 
     /*
      * ⚠️ 先把文件真的写下去，**再**打开。
@@ -937,6 +938,7 @@ export function App() {
       try {
         await host.mkdir(path)
         await host.mkdir(`${path}/blocks`)
+        await host.mkdir(`${path}/${BOARD_ASSETS}`)
         for (const [p, text] of Object.entries(files)) await host.write(p, encodeText(text))
         setNoteDocs((prev) => (prev.includes(path) ? prev : [...prev, path]))
         if (dir) setExpanded((prev) => new Set(prev).add(dir))
@@ -1104,6 +1106,15 @@ export function App() {
       }
       return
     }
+    /*
+     * `.note` 是一个目录，块文件和 assets/ 都不在 files 表里 ——
+     * 只从内存树里删，刷新后整篇会"复活"，v3 的资产还会变成孤儿。
+     * 这里直接让宿主递归删目录；失败要说出来，不能假装删掉了。
+     */
+    if ((noteDocs.includes(path) || path.toLowerCase().endsWith('.note')) && phase.t === 'ready') {
+      void phase.host.remove(path).catch((e) => say('error', `删不掉这篇块笔记：${String(e)}`))
+    }
+
     const r = deleteEntry(files, dirs, path)
     setFiles(r.files)
     setDirs(r.dirs)

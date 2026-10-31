@@ -188,7 +188,7 @@ export function TreePanel({
 
     const items: MenuItem[] = [
       { label: '新建笔记', onSelect: () => startCreate(dir, 'note') },
-      { label: '新建块笔记（富文本）', onSelect: () => startCreate(dir, 'noteDoc') },
+      { label: '新建块笔记（纵向画布）', onSelect: () => startCreate(dir, 'noteDoc') },
       { label: '新建文件夹', onSelect: () => startCreate(dir, 'folder') },
     ]
 

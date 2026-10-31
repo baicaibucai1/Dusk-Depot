@@ -136,8 +136,9 @@ export function isNoteDocPath(path: Path): boolean {
 /**
  * 这份 `.note` 是哪一版、什么布局。
  *
- * 只有 v1（没写 version / version: 1）和 v2（version: 2 + layoutMode: "flow"）两种。
- * **不认识的新版本不猜**：`version > 2` 时 layoutMode 走标记里写的那个，
+ * v1（没写 version / version: 1）、v2（version: 2 + layoutMode: "flow"）、
+ * v3（version: 3 + layoutMode: "flow"|"free"，纵向块画布）。
+ * **不认识的新版本不猜**：`version >= 3` 时 layoutMode 走标记里写的那个，
  * 没写就当 flow（宁可当成新版打开，也不要拿 v1 的画布去覆盖它）。
  */
 export type NoteLayoutMode = 'canvas' | 'flow'
@@ -171,6 +172,8 @@ export function readNoteMarker(dir: Path, files: Record<Path, string>): NoteMark
  */
 export function inferNoteMarker(dir: Path, files: Record<Path, string>): NoteMarker {
   const base = dir.endsWith('/') ? dir.slice(0, -1) : dir
+  // v3 的 board.json 是一眼能认出来的形状，优先于块文件猜
+  if (files[`${base}/board.json`]) return { version: 3, layoutMode: 'flow' }
   const prefix = `${base}/${NOTE_BLOCKS}/`
   for (const [path, text] of Object.entries(files)) {
     if (!path.startsWith(prefix) || !path.endsWith('.json')) continue

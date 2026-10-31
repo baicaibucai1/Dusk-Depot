@@ -1409,3 +1409,123 @@ html[data-dd-drop='tree-blank'] [data-drop-zone='tree-blank'] {
   background: #e9f7f0;
   color: #054e38;
 }
+
+/* ═══════════════════════════════════════════════════════════
+ * `.note` v3 —— 纵向块画布
+ *
+ * 每张卡片里是一个独立的小编辑器（.dd-board-input），
+ * 所以这里的排版只作用在"块内"，不再有整篇文档的宽度/间距规则。
+ * ═══════════════════════════════════════════════════════════ */
+
+.dd-board-title {
+  display: block;
+  width: 100%;
+  margin: 0 0 0.35em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 1.92em;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.24;
+  color: var(--color-ink);
+  outline: none;
+}
+
+.dd-board-title::placeholder {
+  color: color-mix(in srgb, var(--color-ink-3) 45%, transparent);
+}
+
+.dd-board-input-wrap {
+  min-width: 0;
+}
+
+.dd-board-input {
+  min-height: 1.65em;
+  outline: none;
+  font-family: var(--dd-font);
+  font-size: var(--dd-fs);
+  line-height: var(--dd-lh);
+  color: var(--color-ink);
+  word-break: break-word;
+}
+
+.dd-board-input p {
+  margin: 0.12em 0;
+}
+
+.dd-board-input h1,
+.dd-board-input h2 {
+  margin: 0.15em 0 0.1em;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.dd-board-input h1 {
+  font-size: 1.55em;
+}
+
+.dd-board-input h2 {
+  font-size: 1.22em;
+}
+
+.dd-board-input code {
+  border-radius: 4px;
+  background: var(--color-surface-2);
+  padding: 0.08em 0.32em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.dd-board-input a {
+  color: var(--color-green-deep);
+  text-decoration-color: color-mix(in srgb, var(--color-green) 40%, transparent);
+}
+
+.dd-board-input a:hover {
+  text-decoration-color: var(--color-green);
+}
+
+/* 空块提示：只在当前块里出现，别整页都是灰字 */
+.dd-board-input .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--color-ink-3);
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+/* 拖动排序时的落点线：横跨卡片，但往左伸进手柄留白 */
+.dd-board-drop {
+  height: 2px;
+  margin: 1px 0 1px -38px;
+  border-radius: 2px;
+  background: var(--color-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-green) 14%, transparent);
+}
+
+/* 勾掉的待办：颜色和删除线要作用到块内的编辑器上（它在子层自己设了 color） */
+.dd-board-todo-done .dd-board-input {
+  color: var(--color-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--color-ink-3) 70%, transparent);
+}
+
+/* 旧版 v1/v2 只读：把节点视图里残留的编辑入口收掉（坐标/内容仍然可见） */
+.dd-legacy-readonly .dd-note-tools,
+.dd-legacy-readonly .dd-note-resize,
+.dd-legacy-readonly .dd-note-clear,
+.dd-legacy-readonly .dd-note-cols-bar,
+.dd-legacy-readonly .dd-note-cols button,
+.dd-legacy-readonly .dd-flow-columns-bar,
+.dd-legacy-readonly .dd-flow-column-resize {
+  display: none !important;
+}
+
+.dd-legacy-readonly .dd-note-image-empty,
+.dd-legacy-readonly .dd-flow-image-empty {
+  pointer-events: none;
+}

@@ -62,11 +62,13 @@ type Props = {
   onInfo?: (dir: string, info: NoteInfo) => void
   onJump?: (target: string, kind: JumpKind) => void
   notes?: { path: string; title: string }[]
+  /** v1/v2 旧笔记：只读打开，不写盘、不改格式 */
+  readOnly?: boolean
 }
 
 type Status = 'saved' | 'dirty' | 'saving' | 'error'
 
-export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
+export function FlowNote({ host, dir, doc, onInfo, onJump, notes, readOnly = false }: Props) {
   const [title, setTitle] = useState(doc.meta.title)
   const [status, setStatus] = useState<Status>('saved')
   const [error, setError] = useState<string | null>(null)
@@ -121,11 +123,12 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
       Placeholder.configure({ placeholder: '输入 “/” 选择块，或直接开始写…', showOnlyCurrent: true }),
     ],
     content: contentOf(doc) as never,
-    editable: true,
+    editable: !readOnly,
     editorProps: {
       attributes: { class: 'dd-flow', 'data-dd-flow': '' },
 
       handlePaste: (_view, event) => {
+        if (readOnly) return false
         const file = [...(event.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'))
         if (!file) return false
         event.preventDefault()
@@ -137,6 +140,7 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
       },
 
       handleDrop: (view, event) => {
+        if (readOnly) return false
         const file = event.dataTransfer?.files?.[0]
         if (!file || !file.type.startsWith('image/')) return false
         event.preventDefault()
@@ -249,12 +253,14 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
   /* 编辑 → 记快照 + 防抖保存 */
   useEffect(() => {
     if (!editor) return
-    const onUpdate = () => touch()
+    const onUpdate = () => {
+      if (!readOnly) touch()
+    }
     editor.on('update', onUpdate)
     return () => {
       editor.off('update', onUpdate)
     }
-  }, [editor, touch])
+  }, [editor, touch, readOnly])
 
   /* 卸载 / 换文档：把没写完的那份立刻落盘（写的是它自己的 dir） */
   useEffect(() => {
@@ -334,6 +340,7 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
 
   /* ── 标题 ── */
   const onTitleChange = (value: string) => {
+    if (readOnly) return
     setTitle(value)
     window.clearTimeout(titleTimer.current)
     titleTimer.current = window.setTimeout(() => {
@@ -371,6 +378,7 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
 
         <input
           value={title}
+          readOnly={readOnly}
           onChange={(e) => onTitleChange(e.target.value)}
           aria-label="文档标题"
           placeholder="无标题"
@@ -386,9 +394,9 @@ export function FlowNote({ host, dir, doc, onInfo, onJump, notes }: Props) {
         ) : null}
       </div>
 
-      <BlockChrome editor={editor} scrollRef={scrollRef} />
-      <SlashMenu editor={editor} />
-      <BubbleBar editor={editor} notes={notes} />
+      {readOnly ? null : <BlockChrome editor={editor} scrollRef={scrollRef} />}
+      {readOnly ? null : <SlashMenu editor={editor} />}
+      {readOnly ? null : <BubbleBar editor={editor} notes={notes} />}
     </div>
   )
 }
