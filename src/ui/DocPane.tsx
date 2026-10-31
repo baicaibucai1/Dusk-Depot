@@ -74,6 +74,8 @@ type Props = {
   noteDir: string | null
   /** 块编辑器把大纲/正文报给上层（右栏要用） */
   onNoteInfo?: (dir: string, info: import('./NoteEditor').NoteInfo) => void
+  /** 拖进来的东西这个位置不收 —— 交给外层提示 */
+  onNotice?: (text: string) => void
 }
 
 /* 三档，照 Obsidian 那套：阅读（不可编辑）／编写（实时预览）／原代码（不渲染） */
@@ -104,6 +106,7 @@ export function DocPane({
   assist,
   noteDir,
   onNoteInfo,
+  onNotice,
 }: Props) {
   // 允许用 ?mode=read|preview|source 直接开在某一档 —— 分享链接和截图验证都用得上
   const [mode, setMode] = useState<Mode>(() => {
@@ -170,7 +173,18 @@ export function DocPane({
   /** 粘贴 / 拖入的图片：存进图床，并在光标处插入 `![]()` 引用 */
   async function takeFiles(files: File[]): Promise<boolean> {
     const images = files.filter((f) => f.type.startsWith('image/') || isImageName(f.name))
-    if (images.length === 0) return false
+    if (images.length === 0) {
+      if (files.length > 0) {
+        const epub = files.filter((f) => /\.epub$/i.test(f.name))
+        onNotice?.(
+          epub.length
+            ? '电子书请拖到左侧「书架」，不要放进笔记里'
+            : '编辑器只接收图片；其他文件请拖到左侧文件树',
+        )
+        return true
+      }
+      return false
+    }
 
     for (const f of images) {
       const path = await storeImage(f)
@@ -179,6 +193,17 @@ export function DocPane({
     }
     return true
   }
+
+  /* 桌面端原生拖入的图片：Rust 侧已经把文件放进附件，这里只负责插引用 */
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const path = (e as CustomEvent<{ path?: string }>).detail?.path
+      if (!path) return
+      editorRef.current?.insert(`\n![](${path})\n`)
+    }
+    window.addEventListener('dd:insert-image', onInsert)
+    return () => window.removeEventListener('dd:insert-image', onInsert)
+  }, [])
 
   /** 打开 [[某篇#小节]] 之后滚到那个标题 */
   useEffect(() => {
@@ -368,6 +393,7 @@ export function DocPane({
 
       <div
         className={noteDir ? 'hidden' : 'min-h-0 flex-1'}
+        data-drop-zone={preview ? undefined : 'editor'}
         onPasteCapture={(e) => {
           if (preview) return
           const files = Array.from(e.clipboardData?.files ?? [])

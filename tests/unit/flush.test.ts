@@ -15,7 +15,7 @@ function fakeHost(initial: { files?: Record<string, string>; dirs?: string[] } =
     kind: 'memory',
     label: 'fake',
     where: '',
-    capabilities: { pickDir: false, watch: false, durable: false, keychain: false },
+    capabilities: { pickDir: false, watch: false, durable: false, keychain: false, reveal: false },
 
     async list() {
       return [

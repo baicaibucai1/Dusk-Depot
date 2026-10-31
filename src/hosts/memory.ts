@@ -64,7 +64,7 @@ export function memoryHost(): Host {
     kind: 'memory',
     label: '浏览器暂存',
     where: '',
-    capabilities: { pickDir: false, watch: false, durable: false, keychain: false },
+    capabilities: { pickDir: false, watch: false, durable: false, keychain: false, reveal: false },
 
     async list() {
       const { files, dirs } = read()

@@ -1,45 +1,51 @@
 import type { ReactElement } from 'react'
-import { Files as FilesIcon } from 'lucide-react'
+import { BookOpen, Files as FilesIcon } from 'lucide-react'
 import { IconSliders } from './icons'
 
 /*
  * 最左侧的功能导航条（48px）。
  *
- * 现在只有「文件」一个入口：工具页去掉了（那一页大半是"待接"的空壳，
- * 与其摆着不如先收起来）。等真有工具接上数据再加回来。
+ * 「文件」= 仓库（用户的文件夹），「书架」= 本机书库（EPUB）。
+ * 两套数据互不相干：书架不写仓库，切仓库也不动书架。
  *
- * 为什么又有这条轨：2026-10-26 把那时的图标轨删了，把「文件 / 工具」
- * 塞进目录栏顶部当页签；现在的桌面布局要求导航和内容分开 ——
- * 导航常驻、窄，内容栏可以被折叠/拖宽而不影响导航。
+ * 点击当前入口 = 收起/展开左侧内容栏；点击另一个入口 = 切工作区并展开。
  */
 
+export type Space = 'files' | 'shelf'
+
 type Props = {
-  /** 目录栏收起时也留着导航，点一下就能再展开 */
+  space: Space
+  onSpace: (s: Space) => void
+  /** 内容栏收起时也留着导航，点一下就能再展开 */
   treeOpen: boolean
   onToggleTree: () => void
   onSettings: () => void
 }
 
-const ITEMS: { label: string; render: (cls: string) => ReactElement }[] = [
-  { label: '文件', render: (cls) => <FilesIcon className={cls} /> },
+const ITEMS: { id: Space; label: string; render: (cls: string) => ReactElement }[] = [
+  { id: 'files', label: '文件', render: (cls) => <FilesIcon className={cls} /> },
+  { id: 'shelf', label: '书架', render: (cls) => <BookOpen className={cls} /> },
 ]
 
-export function Rail({ treeOpen, onToggleTree, onSettings }: Props) {
+export function Rail({ space, onSpace, treeOpen, onToggleTree, onSettings }: Props) {
   return (
     <nav
       aria-label="功能导航"
       className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface-2/40 py-2"
     >
-      {ITEMS.map(({ label, render }) => {
-        const on = treeOpen
+      {ITEMS.map(({ id, label, render }) => {
+        const on = space === id
         return (
           <button
-            key={label}
+            key={id}
             type="button"
             title={label}
             aria-label={label}
             aria-pressed={on}
-            onClick={onToggleTree}
+            onClick={() => {
+              if (on) onToggleTree()
+              else onSpace(id)
+            }}
             className={[
               'relative grid size-9 place-items-center rounded-lg transition-colors',
               on
@@ -47,7 +53,7 @@ export function Rail({ treeOpen, onToggleTree, onSettings }: Props) {
                 : 'text-ink-3 hover:bg-surface-2 hover:text-ink-2',
             ].join(' ')}
           >
-            {on ? (
+            {on && treeOpen ? (
               <span
                 aria-hidden
                 className="absolute top-1/2 left-0 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-green"

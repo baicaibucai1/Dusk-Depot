@@ -7,6 +7,10 @@ export type MenuItem = {
   danger?: boolean
   /** 一条分隔线 */
   divider?: boolean
+  /** 这个环境做不了 —— 灰掉并说明原因，别给一个点了没反应的按钮 */
+  disabled?: boolean
+  /** 灰掉时鼠标悬停的说明 */
+  reason?: string
 }
 
 type Props = { x: number; y: number; items: MenuItem[]; onClose: () => void }
@@ -57,14 +61,20 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
             key={item.label}
             type="button"
             role="menuitem"
+            disabled={item.disabled}
+            title={item.disabled ? item.reason : undefined}
             onClick={() => {
+              if (item.disabled) return
               item.onSelect()
               onClose()
             }}
             className={[
               'flex h-[30px] w-full items-center px-3 text-left text-[13px] transition-colors',
-              item.danger ? 'text-ink' : 'text-ink-2',
-              'hover:bg-surface-2',
+              item.disabled
+                ? 'cursor-not-allowed text-ink-3/60'
+                : item.danger
+                  ? 'text-ink hover:bg-surface-2'
+                  : 'text-ink-2 hover:bg-surface-2',
             ].join(' ')}
           >
             {item.label}

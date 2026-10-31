@@ -47,6 +47,11 @@ export type HostCapabilities = {
   durable: boolean
   /** 能进系统凭据库 */
   keychain: boolean
+  /**
+   * 能在系统文件管理器里定位一个文件。
+   * 只有拿到真实绝对路径的宿主（桌面端）才为 true；浏览器 FSA 和 memory 都拿不到。
+   */
+  reveal: boolean
 }
 
 export type Host = {
@@ -73,4 +78,12 @@ export type Host = {
    * 将来搬整棵目录时会用得上。
    */
   move?(from: string, to: string): Promise<void>
+
+  /**
+   * 在系统文件管理器里定位这个文件。
+   *
+   * ⚠️ 只对**这个宿主根目录内**的相对路径负责：桌面端会自己做 join + 越界检查，
+   *    浏览器端没有真实路径，`capabilities.reveal` 是 false，这个方法不存在。
+   */
+  reveal?(path: string): Promise<void>
 }

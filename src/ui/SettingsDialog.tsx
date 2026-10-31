@@ -8,19 +8,34 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DEFAULTS, type Settings } from './settings'
 
+export type ShelfInfo = {
+  where: string
+  kind: string
+  durable: boolean
+  canReveal: boolean
+  busy: boolean
+  error: string | null
+  onChange: () => void
+  onReveal: () => void
+  onRetry: () => void
+}
+
 type Props = {
   settings: Settings
   onChange: (s: Settings) => void
   onClose: () => void
   onReset: () => void
+  /** 书架位置是设备级设置，跟仓库无关 */
+  shelf?: ShelfInfo
 }
 
-type TabId = 'general' | 'look' | 'store'
+type TabId = 'general' | 'look' | 'store' | 'shelf'
 
 const NAV: { group: string; items: { id: TabId; label: string }[] }[] = [
   { group: '设置', items: [{ id: 'general', label: '通用' }] },
   { group: '功能', items: [{ id: 'look', label: '外观' }] },
   { group: '数据与安全', items: [{ id: 'store', label: '存储' }] },
+  { group: '书架', items: [{ id: 'shelf', label: '存储位置' }] },
 ]
 
 const SELECT =
@@ -92,7 +107,7 @@ function Slider({
   )
 }
 
-export function SettingsDialog({ settings, onChange, onClose, onReset }: Props) {
+export function SettingsDialog({ settings, onChange, onClose, onReset, shelf }: Props) {
   const [tab, setTab] = useState<TabId>('general')
   const [q, setQ] = useState('')
 
@@ -114,7 +129,13 @@ export function SettingsDialog({ settings, onChange, onClose, onReset }: Props) 
     )
   }, [q])
 
-  const title = tab === 'general' ? '编辑与链接' : tab === 'look' ? '外观' : '存储'
+  const TITLES: Record<TabId, string> = {
+    general: '编辑与链接',
+    look: '外观',
+    store: '存储',
+    shelf: '书架存储位置',
+  }
+  const title = TITLES[tab]
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/25 p-6">
@@ -292,7 +313,69 @@ export function SettingsDialog({ settings, onChange, onClose, onReset }: Props) 
             </>
           ) : null}
 
-          {tab === 'store' ? (
+          {tab === 'shelf' ? (
+            <>
+              <Section title="书架">
+                <Row
+                  title="书架位置"
+                  desc="电子书、书架清单（library.json）、阅读进度和书签都放在这个目录里；跟仓库完全分开，切仓库不会动它。"
+                >
+                  <div className="flex max-w-[300px] flex-col items-end gap-1">
+                    <span className="max-w-[300px] truncate font-mono text-[11px] text-ink-2" title={shelf?.where ?? ''}>
+                      {shelf?.where || '未设置'}
+                    </span>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        disabled={!shelf || shelf.busy}
+                        onClick={shelf?.onChange}
+                        className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2 disabled:opacity-50"
+                      >
+                        更换…
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!shelf?.canReveal}
+                        title={shelf?.canReveal ? undefined : '当前运行环境拿不到真实路径'}
+                        onClick={shelf?.onReveal}
+                        className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2 disabled:opacity-40"
+                      >
+                        打开书架文件夹
+                      </button>
+                    </div>
+                  </div>
+                </Row>
+                <Row
+                  title="换位置时不会自动覆盖"
+                  desc="新目录里已有书架就只能选“使用”；搬迁需要空目录，而且旧目录不会自动删。"
+                  last
+                >
+                  <span className="text-[12px] text-ink-3">{shelf?.durable ? '磁盘目录' : '暂存（不落盘）'}</span>
+                </Row>
+              </Section>
+
+              {shelf?.error ? (
+                <Section title="状态">
+                  <Row title="书架打不开" desc={shelf.error} last>
+                    <button
+                      type="button"
+                      onClick={shelf.onRetry}
+                      className="rounded-md border border-line px-2 py-1 text-[11.5px] text-ink-2 hover:bg-surface-2"
+                    >
+                      重试
+                    </button>
+                  </Row>
+                </Section>
+              ) : null}
+
+              {!shelf?.durable ? (
+                <p className="px-1 text-[11.5px] leading-relaxed text-ink-3">
+                  当前是暂存模式：书和进度只在这次会话里，关掉程序就没了。桌面端默认落在应用数据目录下的
+                  <span className="font-mono"> bookshelf</span>，浏览器需要你授权一个目录。
+                </p>
+              ) : null}
+            </>
+          ) : tab === 'store' ? (
             <>
               <Section title="仓库">
                 <Row

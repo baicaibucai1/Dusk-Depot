@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { isNote, type TreeNode } from '../core/model/library'
 import { labelOf } from '../core/model/path'
+import { setHighlight } from './dnd'
 import { TreeIcon } from './fileIcon'
 import type { FileMap } from '../core/model/library'
 import type { ReactNode } from 'react'
@@ -32,6 +33,13 @@ type Props = {
   onNewFolder: (dir: string) => string | null
   /** 改名。返回错误消息；成功返回 null */
   onRename: (path: string, name: string) => string | null
+  /** 在系统文件管理器里定位（只有桌面端有） */
+  canReveal: boolean
+  onReveal: (path: string) => void
+  /** 复制仓库内相对路径 */
+  onCopyPath: (path: string) => void
+  /** 从系统拖进来的文件（浏览器路径） */
+  onDropFiles: (files: File[], dir: string) => void
   /** 搬家到某个目录（`''` = 根）。返回错误消息；成功返回 null */
   onMove: (path: string, destDir: string) => string | null
   onDelete: (path: string) => void
@@ -99,6 +107,10 @@ export function TreePanel({
   onNewNoteDoc,
   onNewFolder,
   onRename,
+  canReveal,
+  onReveal,
+  onCopyPath,
+  onDropFiles,
   onMove,
   onDelete,
   icons,
@@ -200,6 +212,16 @@ export function TreePanel({
               },
             ]
           : []),
+        {
+          label: '复制相对路径',
+          onSelect: () => onCopyPath(path),
+        },
+        {
+          label: '在资源管理器中查看',
+          disabled: !canReveal,
+          reason: '当前运行环境拿不到真实路径（浏览器 / 暂存模式）',
+          onSelect: () => onReveal(path),
+        },
         {
           label: pinned.includes(path) ? '取消置顶' : '置顶',
           onSelect: () => onTogglePin(path),
@@ -306,17 +328,34 @@ export function TreePanel({
               setDragging(null)
               setDropDir(null)
             }}
+            data-drop-zone="tree"
+            data-drop-dir={isDir ? n.path : n.path.slice(0, Math.max(0, n.path.lastIndexOf('/')))}
+            onDragLeave={() => {
+              setDropDir((d) => (d === n.path ? null : d))
+              setHighlight(null)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (e.dataTransfer.files.length > 0) {
+                onDropFiles([...e.dataTransfer.files], isDir ? n.path : n.path.slice(0, Math.max(0, n.path.lastIndexOf('/'))))
+                return
+              }
+              if (!isDir) return
+              drop(n.path)
+            }}
             onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('Files')) {
+                e.preventDefault()
+                e.stopPropagation()
+                e.dataTransfer.dropEffect = 'copy'
+                setDropDir(isDir ? n.path : null)
+                setHighlight({ zone: 'tree', dir: isDir ? n.path : null, el: e.currentTarget as HTMLElement })
+                return
+              }
               if (!isDir || !dragging || dragging === n.path) return
               e.preventDefault()
               setDropDir(n.path)
-            }}
-            onDragLeave={() => setDropDir((d) => (d === n.path ? null : d))}
-            onDrop={(e) => {
-              if (!isDir) return
-              e.preventDefault()
-              e.stopPropagation()
-              drop(n.path)
             }}
             onContextMenu={(e) => {
               e.preventDefault()
@@ -401,7 +440,15 @@ export function TreePanel({
 
           <div
             className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-4"
+            data-drop-zone="tree-blank"
             onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('Files')) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'copy'
+                setDropDir('')
+                setHighlight({ zone: 'tree-blank', dir: null, el: e.currentTarget })
+                return
+              }
               // 拖到列表空白处 = 挪到根目录
               if (dragging) {
                 e.preventDefault()
@@ -410,6 +457,11 @@ export function TreePanel({
             }}
             onDrop={(e) => {
               e.preventDefault()
+              if (e.dataTransfer.files.length > 0) {
+                setDropDir(null)
+                onDropFiles([...e.dataTransfer.files], '')
+                return
+              }
               drop('')
             }}
             onContextMenu={(e) => {

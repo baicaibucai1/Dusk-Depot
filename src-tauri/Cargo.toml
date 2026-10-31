@@ -30,3 +30,5 @@ log = "0.4"
 tauri = { version = "2.12.4", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
+# 「在资源管理器中查看」走官方 Opener 插件（不自己拼 shell 命令）
+tauri-plugin-opener = "2"

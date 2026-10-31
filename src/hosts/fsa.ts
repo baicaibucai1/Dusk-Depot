@@ -152,7 +152,7 @@ export function fsaHost(handle: Dir): Host {
     kind: 'fsa',
     label: handle.name,
     where: handle.name,
-    capabilities: { pickDir: true, watch: false, durable: true, keychain: false },
+    capabilities: { pickDir: true, watch: false, durable: true, keychain: false, reveal: false },
 
     async list() {
       const out: Entry[] = []
