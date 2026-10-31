@@ -347,6 +347,7 @@ $drop = Eval @'
   const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
   const dt = new DataTransfer();
   dt.items.add(new File([blob], '卡片.png', { type: 'image/png' }));
+  dt.items.add(new File([new TextEncoder().encode('这是一份附件说明。')], '说明.txt', { type: 'text/plain' }));
   const zone = document.querySelector('[data-dd-flow-scroll]');
   if (!zone) return 'no-zone';
   zone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
@@ -360,7 +361,9 @@ $assetPath = Eval 'Object.keys(window.__files).find((p) => p.indexOf("画布测�
 Check '图片复制进本笔记 assets/' ([bool]($assetPath -ne '')) "path=$assetPath"
 $imgBlock = Eval 'Object.keys(window.__files).filter((p) => p.indexOf("画布测试.note/blocks/") === 0).map((p) => window.__files[p].text).find((t) => t.indexOf("assets/") >= 0) ?? ""'
 Check '块文件里存的是相对路径' ([bool]($imgBlock -match 'assets/')) "block=$imgBlock"
-Check '图片块出现在画布上' ((BlockCount) -eq 4) "n=$(BlockCount)"
+Check '图片块出现在画布上' ((BlockCount) -eq 5) "n=$(BlockCount)"
+$fileBlock = Eval 'Object.keys(window.__files).filter((p) => p.indexOf("画布测试.note/blocks/") === 0).map((p) => window.__files[p].text).find((t) => t.indexOf("说明.txt") >= 0) ?? ""'
+Check '文件块也复制进 assets/ 并记了名字' ([bool](($fileBlock -match '"type": "file"') -and ($fileBlock -match '说明.txt') -and ($fileBlock -match 'assets/'))) "block=$fileBlock"
 
 # 先收起连接面板，拍一张干净的画布；再打开拍连接
 if (ClickText 'button' '连接 1') { Start-Sleep -Milliseconds 350 }
@@ -383,9 +386,15 @@ $logOpen = Eval 'window.__log.length'
 if (-not (ClickText '[data-dd-files] button' '画布测试')) { Write-Host 'FAIL 点不到画布'; $fail++ }
 Start-Sleep -Milliseconds 1400
 Check '重开（无修改）不写盘' ((Eval 'window.__log.length') -eq $logOpen) "log=$(Eval 'window.__log.slice(-4).join(",")')"
-Check '重开后块数还在' ((BlockCount) -eq 4) "n=$(BlockCount)"
+Check '重开后块数还在' ((BlockCount) -eq 5) "n=$(BlockCount)"
 Check '重开后正文还在' ([bool]((Eval 'document.body.innerText') -match '第一块文字|第二块文字')) ''
 Check '重开后连接还在' ([bool]((Eval 'document.body.innerText') -match '连接 1')) ''
+if (-not (ClickText 'button' '连接 1')) { Write-Host 'FAIL 打不开连接面板'; $fail++ }
+Start-Sleep -Milliseconds 300
+if (-not (ClickSel 'button[aria-label=删除连接]')) { Write-Host 'FAIL 点不到删除连接'; $fail++ }
+Start-Sleep -Milliseconds 900
+$relAfter = ReadFile '画布测试.note/relations.json'
+Check '删除连接后 relations.json 为空' ([bool](($relAfter -match '"relations": \[\]') -or ($relAfter -match '"relations":\s*\[\s*\]'))) "rel=$relAfter"
 
 Write-Host ''
 Write-Host 'H. 旧版只读'
