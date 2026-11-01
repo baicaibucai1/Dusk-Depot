@@ -4,6 +4,7 @@ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { Host } from '../../core/ports/host'
 import { nameOf } from '../../core/model/path'
+import type { ReadingSpot } from '../../core/model/vault'
 
 /*
  * PDF 预览（只读，可选文本）。
@@ -21,6 +22,10 @@ import { nameOf } from '../../core/model/path'
 type Props = {
   host: Host
   path: string
+  /** 上次读到哪儿（`.zzq` 里存的），打开时恢复 */
+  initial?: ReadingSpot
+  /** 位置变了（防抖后）——外层负责写回 `.zzq` */
+  onPosition?: (spot: ReadingSpot) => void
 }
 
 type Zoom = number | 'fit'
@@ -29,17 +34,21 @@ const ZOOM_MIN = 0.4
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.05
 
+const clampZoom = (n: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(n * 100) / 100))
+
 /** 页与页之间的间距 + 上下留白，算"适合宽度"时要扣掉 */
 const GUTTER = 56
 
 type PageSize = { w: number; h: number }
 
-export function PdfViewer({ host, path }: Props) {
+export function PdfViewer({ host, path, initial, onPosition }: Props) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
   const [pages, setPages] = useState(0)
   const [sizes, setSizes] = useState<PageSize[]>([])
   const [pageNo, setPageNo] = useState(1)
-  const [zoom, setZoom] = useState<Zoom>('fit')
+  const [zoom, setZoom] = useState<Zoom>(() =>
+    typeof initial?.zoom === 'number' ? clampZoom(initial.zoom) : 'fit',
+  )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [size, setSize] = useState(0)
@@ -52,6 +61,10 @@ export function PdfViewer({ host, path }: Props) {
   const [boxW, setBoxW] = useState(0)
 
   const seq = useRef(0)
+  /** 已经为哪个文件恢复过位置（换文件要重新来） */
+  const restoredRef = useRef('')
+  /** 页码输入框的草稿 */
+  const [draft, setDraft] = useState('1')
 
   // 容器宽度变化（窗口缩放 / 右栏收放 / 分栏）要重新按宽度排版
   useEffect(() => {
@@ -77,8 +90,9 @@ export function PdfViewer({ host, path }: Props) {
     setSizes([])
     setPageNo(1)
     setLive(new Set())
-    setZoom('fit')
+    setZoom(typeof initial?.zoom === 'number' ? clampZoom(initial.zoom) : 'fit')
     pageRefs.current = []
+    restoredRef.current = ''
 
     void (async () => {
       try {
@@ -222,6 +236,60 @@ export function PdfViewer({ host, path }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scaleNow])
 
+  /* 打开时回到上次那一页（等页面容器排好版再滚，否则滚不动） */
+  useEffect(() => {
+    if (pages === 0 || restoredRef.current === path) return
+    restoredRef.current = path
+    const p = initial?.page
+    if (!p || p <= 1) return
+    const target = Math.min(pages, Math.max(1, Math.round(p)))
+    setPageNo(target)
+    requestAnimationFrame(() => {
+      pageRefs.current[target - 1]?.scrollIntoView({ block: 'start' })
+    })
+  }, [pages, path, initial])
+
+  /* 页码滚动/缩放都跟着页码输入框 */
+  useEffect(() => {
+    setDraft(String(pageNo))
+  }, [pageNo])
+
+  /* 位置变化 → 防抖写回（滚动途中不写，停下来一会儿再记） */
+  const savePos = useRef(onPosition)
+  savePos.current = onPosition
+  useEffect(() => {
+    if (!savePos.current || pages === 0) return
+    const t = window.setTimeout(() => savePos.current?.({ page: pageNo, zoom }), 1000)
+    return () => window.clearTimeout(t)
+  }, [pageNo, zoom, pages])
+
+  /* 键盘：PageDown/PageUp/空格/Home/End —— PDF 必须有，不然只能拖滚动条 */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const root = scrollRef.current
+      if (!root) return
+      const step = root.clientHeight * 0.92
+      if (e.key === 'PageDown' || e.key === ' ') {
+        e.preventDefault()
+        root.scrollBy({ top: step })
+      } else if (e.key === 'PageUp') {
+        e.preventDefault()
+        root.scrollBy({ top: -step })
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        root.scrollTo({ top: 0 })
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        root.scrollTo({ top: root.scrollHeight })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const clamp = (n: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(n * 100) / 100))
   const fit = zoom === 'fit'
   const pct = Math.round(scaleNow * 100)
@@ -230,6 +298,13 @@ export function PdfViewer({ host, path }: Props) {
     const target = Math.min(pages, Math.max(1, n))
     setPageNo(target)
     pageRefs.current[target - 1]?.scrollIntoView({ block: 'start' })
+  }
+
+  /** 页码输入框：回车/失焦时跳过去，输错了退回当前页 */
+  const commitPage = () => {
+    const n = Number(draft)
+    if (Number.isFinite(n) && n >= 1 && n <= pages) jump(Math.round(n))
+    else setDraft(String(pageNo))
   }
 
   const onSlider = (v: number) => setZoom(clamp(v / 100))
@@ -257,8 +332,30 @@ export function PdfViewer({ host, path }: Props) {
           >
             <ChevronLeft className="size-4" />
           </button>
-          <span className="min-w-14 text-center font-mono text-[11px] tabular-nums text-ink-2">
-            {pages > 0 ? `${pageNo} / ${pages}` : '— / —'}
+          <span className="flex items-center gap-0.5">
+            <input
+              value={pages > 0 ? draft : '—'}
+              onChange={(e) => setDraft(e.target.value.replace(/\D/g, '').slice(0, 5))}
+              onFocus={(e) => {
+                setDraft(String(pageNo))
+                e.currentTarget.select()
+              }}
+              onBlur={commitPage}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitPage()
+                  e.currentTarget.blur()
+                } else if (e.key === 'Escape') {
+                  setDraft(String(pageNo))
+                  e.currentTarget.blur()
+                }
+              }}
+              disabled={pages === 0}
+              aria-label="跳到页码"
+              title="输入页码回车跳转"
+              className="w-9 rounded border border-transparent bg-transparent py-0.5 text-center font-mono text-[11px] tabular-nums text-ink-2 hover:border-line focus:border-line focus:bg-surface focus:text-ink focus:outline-none"
+            />
+            <span className="font-mono text-[11px] tabular-nums text-ink-3">/ {pages || '—'}</span>
           </span>
           <button
             type="button"

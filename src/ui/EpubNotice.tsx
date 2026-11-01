@@ -1,9 +1,11 @@
 /*
- * 仓库里遇到 `.epub` 时显示的东西。
+ * 书架没就绪时，仓库里的 `.epub` 落到这一页。
  *
- * 电子书是书架的东西：文件区不解析、不按文本打开、也不把书/进度写进仓库。
- * 但"树里直接看不见"也不行 —— 用户会以为文件丢了。所以收进树，点开给一条
- * 明确的说明 + 两个动作：去书架 / 把这份副本加进书架。
+ * 正常情况下在文件树里点 `.epub` 就是**直接开始读**：自动把副本放进书架、
+ * 切到书架工作区打开（见 App 的 openRepoEpub）。只有书架还没选目录 / 打不开时，
+ * 才需要这一页来解释"为什么点不开"并给出口。
+ *
+ * 电子书仍然不按文本打开、不把书和进度写进仓库。
  */
 import { BookOpen, FolderOpen } from 'lucide-react'
 
@@ -31,10 +33,10 @@ export function EpubNotice({ path, canAdd, busy, reason, onAdd, onOpenShelf }: P
           {name}
         </p>
         <p className="mt-1.5 text-[12px] leading-relaxed text-ink-2">
-          文件区不读电子书。EPUB 请交给左侧「书架」—— 那里才有目录、翻页、书签和阅读进度。
+          这本书在仓库里。读它需要往书架目录复制一份 —— 仓库里的原文件不会移动，也不会被改写。
         </p>
         <p className="mt-1 text-[10.5px] leading-relaxed text-ink-3">
-          加进书架会复制一份到书架目录；仓库里的这个文件不会移动，也不会被改写。
+          书架负责目录、翻页、书签和阅读进度；这些都不会写进仓库。
         </p>
 
         <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -46,7 +48,7 @@ export function EpubNotice({ path, canAdd, busy, reason, onAdd, onOpenShelf }: P
             className="inline-flex items-center gap-1.5 rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep disabled:opacity-45"
           >
             <BookOpen className="size-3.5" />
-            添加到书架
+            开始阅读
           </button>
           <button
             type="button"

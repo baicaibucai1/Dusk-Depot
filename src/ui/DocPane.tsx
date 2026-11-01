@@ -83,6 +83,10 @@ type Props = {
   shelfCanAdd?: boolean
   shelfBusy?: boolean
   shelfReason?: string
+  /** PDF 上次读到哪儿（按仓库路径索引） */
+  reading?: Record<string, import('../core/model/vault').ReadingSpot>
+  /** PDF 位置变了，交给外层写回 .zzq */
+  onPdfPosition?: (path: string, spot: import('../core/model/vault').ReadingSpot) => void
 }
 
 /* 三档，照 Obsidian 那套：阅读（不可编辑）／编写（实时预览）／原代码（不渲染） */
@@ -119,6 +123,8 @@ export function DocPane({
   shelfCanAdd,
   shelfBusy,
   shelfReason,
+  reading,
+  onPdfPosition,
 }: Props) {
   // 允许用 ?mode=read|preview|source 直接开在某一档 —— 分享链接和截图验证都用得上
   const [mode, setMode] = useState<Mode>(() => {
@@ -442,7 +448,13 @@ export function DocPane({
         {active && preview === 'image' ? (
           <ImageViewer host={host} path={active} />
         ) : active && preview === 'pdf' ? (
-          <PdfViewer host={host} path={active} />
+          <PdfViewer
+            key={active}
+            host={host}
+            path={active}
+            initial={reading?.[active]}
+            onPosition={(spot) => onPdfPosition?.(active, spot)}
+          />
         ) : active && epubDoc ? (
           <EpubNotice
             path={active}

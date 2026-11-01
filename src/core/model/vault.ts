@@ -28,6 +28,20 @@ export const VAULT_MARK = '.zzq'
 export const VAULT_APP = 'dusk-depot'
 export const VAULT_VERSION = 2
 
+/**
+ * 上次读到哪儿（目前只有 PDF 用）。
+ *
+ * 为什么进 `.zzq` 而不是 localStorage：阅读位置是**这本书的属性**，
+ * 跟着仓库走 —— 换台机器打开同一个库，还应该停在上次那一页。
+ * 纯 UI 状态（展开/折叠）才留在本机。
+ */
+export type ReadingSpot = {
+  /** 1-based 页码 */
+  page?: number
+  /** 缩放倍率；`'fit'` = 适合宽度 */
+  zoom?: number | 'fit'
+}
+
 /** 挂在单个文件上的属性。加字段直接加，不用动结构 */
 export type FileMeta = {
   /** 收藏。跟置顶是两件事：置顶改顺序，收藏是个集合 */
@@ -39,6 +53,8 @@ export type FileMeta = {
    * 存字符而不是图片路径 —— 换机器、换程序都还能认，而且一行就删得掉。
    */
   icon?: string
+  /** 上次的阅读位置（PDF） */
+  reading?: ReadingSpot
   [key: string]: unknown
 }
 
@@ -50,6 +66,25 @@ export type VaultMeta = {
   files: Record<string, FileMeta>
   /** 别的版本 / 别的工具写进来的字段，原样留着 */
   [key: string]: unknown
+}
+
+/** 从元数据里挑出"有阅读位置"的那些，给界面直接用 */
+export function readingsOf(meta: VaultMeta): Record<string, ReadingSpot> {
+  const out: Record<string, ReadingSpot> = {}
+  for (const [p, m] of Object.entries(meta.files)) {
+    const r = m?.reading
+    if (r && typeof r === 'object') out[p] = r
+  }
+  return out
+}
+
+/** 把一条阅读位置写进元数据（保留这个文件的其他属性） */
+export function setReading(meta: VaultMeta, path: string, spot: ReadingSpot | null): VaultMeta {
+  const prev = meta.files[path] ?? {}
+  const next: FileMeta = { ...prev }
+  if (spot && (spot.page || spot.zoom)) next.reading = spot
+  else delete next.reading
+  return { ...meta, files: { ...meta.files, [path]: next } }
 }
 
 export function emptyMeta(): VaultMeta {

@@ -623,18 +623,17 @@ Check '键盘能打开书籍菜单' ([bool]((Eval 'document.body.innerText') -ma
 Key 'Escape' 27
 
 Write-Host ''
-Write-Host 'L. 仓库里的 EPUB：不读，去书架'
+Write-Host 'L. 仓库里的 EPUB：点开就直接读'
 if (-not (ClickSel 'nav[aria-label=功能导航] button[aria-label=文件]')) { Write-Host 'FAIL 回文件'; $fail++ }
 Start-Sleep -Milliseconds 700
 Check '文件树里有仓库书.epub' ([bool]((Eval 'document.body.innerText') -match '仓库书')) "body=$(Eval 'document.body.innerText.slice(0,160)')"
 if (-not (ClickText '[data-dd-files] button' '仓库书')) { Write-Host 'FAIL 点不到仓库书'; $fail++ }
-Start-Sleep -Milliseconds 500
-Check '文件区不把 EPUB 当正文读' ([bool]((Eval 'document.body.innerText') -match '文件区不读电子书')) ''
-Check '提供「添加到书架」和「去书架」' ([bool]((Eval 'document.body.innerText') -match '添加到书架')) ''
-if (-not (ClickText 'button' '添加到书架')) { Write-Host 'FAIL 点不到添加到书架'; $fail++ }
-Start-Sleep -Milliseconds 1800
-Check '加进书架后自动切到书架工作区' ([bool]((Eval 'Boolean(document.querySelector("[data-dd-shelf]"))'))) ''
+Start-Sleep -Milliseconds 3000
+Check '点一下就进了阅读器（不用先加书架）' ((Num 'document.querySelectorAll("[data-dd-reader] iframe").length') -eq 1) "iframe=$(Num 'document.querySelectorAll("[data-dd-reader] iframe").length')"
+Check '自动切到书架工作区' ([bool]((Eval 'Boolean(document.querySelector("[data-dd-shelf]"))'))) ''
 Check '书架多了一本（从仓库复制）' ((Num "document.querySelectorAll('[data-dd-shelf] [data-book-id]').length") -eq 3) "n=$(Num "document.querySelectorAll('[data-dd-shelf] [data-book-id]').length")"
+$openedTitle = Eval 'document.querySelector("[data-dd-reader] header p")?.textContent ?? ""'
+Check '打开的就是这本《基地》' ([bool]($openedTitle -match '基地')) "title=$openedTitle"
 Check '仓库原文件还在' ([bool]((Eval 'Object.keys(window.__files).join(",")') -match '(^|,)仓库书\.epub')) ''
 Check '没把书写回仓库' (-not [bool]((Eval 'Object.keys(window.__files).join(",")') -match '(^|,)library\.json')) ''
 

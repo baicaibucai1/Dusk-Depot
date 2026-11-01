@@ -58,6 +58,13 @@ function ClickText([string]$sel, [string]$text) {
   Click ([double]$p[0] + [double]$p[2] / 2) ([double]$p[1] + [double]$p[3] / 2)
   return $true
 }
+function ClickRow([string]$text) {
+  $r = Eval "(() => { const b = [...document.querySelectorAll('[data-dd-files] button')].find((x) => (x.textContent || '').includes('$text')); if (!b) return ''; const q = b.getBoundingClientRect(); return q.left + ',' + q.top + ',' + q.width + ',' + q.height })()"
+  if ($r -eq '') { return $false }
+  $p = $r.Split(',')
+  Click ([double]$p[0] + 20) ([double]$p[1] + [double]$p[3] / 2)
+  return $true
+}
 function ClickSel([string]$sel) {
   $r = Eval "(() => { const b = document.querySelector('$sel'); if (!b) return ''; const q = b.getBoundingClientRect(); return q.left + ',' + q.top + ',' + q.width + ',' + q.height })()"
   if ($r -eq '') { return $false }
@@ -208,8 +215,14 @@ $STUB = @"
     });
     return h;
   }
-  window.showDirectoryPicker = async () => { window.__picked += 1; return mk('书库') };
+  // 第 1 次是仓库（根），第 2 次是书架目录（书库）—— 两者必须分开，
+  // 否则 `.zzq` 会被写进书架目录，看不出"书架不写仓库"这条边界
+  window.showDirectoryPicker = async () => {
+    window.__picked += 1;
+    return window.__picked === 1 ? mk('') : mk('书库');
+  };
   window.__long = '$longB64';
+  putBytes('书.epub', window.__long);
   window.__mkEpub = () => {
     const bin = atob(window.__long);
     const bytes = new Uint8Array(bin.length);
@@ -400,7 +413,24 @@ Check '切回分页后没跳回开头（进度还在）' ([bool]([double]$pctBac
 }
 
 Write-Host ''
-Write-Host 'E. 控制台'
+Write-Host 'E. 文件区直接打开 EPUB'
+# 阅读设置面板的全屏遮罩还开着，先点掉它，否则点导航只会关面板
+[void](Eval '(() => { const el = [...document.querySelectorAll("div")].find((d) => typeof d.className === "string" && d.className.includes("fixed") && d.className.includes("inset-0") && d.className.includes("z-20")); if (el) el.click(); return Boolean(el); })()')
+Start-Sleep -Milliseconds 400
+if (-not (ClickSel 'nav[aria-label=功能导航] button[aria-label=文件]')) { Write-Host 'FAIL 回不到文件区'; $fail++ }
+Start-Sleep -Milliseconds 900
+$hasEpubRow = Eval "[...document.querySelectorAll('[data-dd-files] button')].some((b) => (b.textContent || '').includes('.epub'))"
+Check '文件树里能看到 .epub' ($hasEpubRow -eq $true) ''
+if (-not (ClickRow '.epub')) { Write-Host 'FAIL 点不到 epub'; $fail++ }
+Start-Sleep -Milliseconds 3000
+Check '点一下就切到书架工作区' ((Num 'document.querySelectorAll("[data-dd-shelf]").length') -eq 1) ''
+Check '阅读器直接打开了' ((Num 'document.querySelectorAll("[data-dd-reader] iframe").length') -eq 1) "iframe=$(Num 'document.querySelectorAll("[data-dd-reader] iframe").length')"
+Check '内容相同的书没有被复制第二份' ((Num "document.querySelectorAll('[data-dd-shelf] [data-book-id]').length") -eq 1) "n=$(Num "document.querySelectorAll('[data-dd-shelf] [data-book-id]').length")"
+$nowBook = Eval 'document.querySelector("[data-dd-reader] header p")?.textContent ?? ""'
+Check '打开的是《长夜》' ([bool]($nowBook -match '长夜')) "title=$nowBook"
+
+Write-Host ''
+Write-Host 'F. 控制台'
 $errs = Eval 'window.__errs.join(" || ")'
 Check '没有未捕获的报错' ([string]::IsNullOrEmpty("$errs")) "errs=$errs"
 

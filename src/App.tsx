@@ -14,6 +14,8 @@ import { outlineOf } from './core/markdown/parse'
 import { decodeBytes, encodeText } from './core/model/text'
 import {
   iconsOf,
+  readingsOf,
+  setReading,
   isListable,
   parseVault,
   pruneMeta,
@@ -21,6 +23,7 @@ import {
   setIcon,
   VAULT_MARK,
   type FileMeta,
+  type ReadingSpot,
   type VaultMeta,
 } from './core/model/vault'
 import type { Host } from './core/ports/host'
@@ -388,6 +391,8 @@ export function App() {
   const [pins, setPins] = useState<string[]>([])
   /** 自定义文件夹图标：路径 → emoji（存在 .zzq 的 files[path].icon） */
   const [icons, setIcons] = useState<Record<string, string>>({})
+  /** PDF 的阅读位置（按仓库路径），来自 .zzq */
+  const [reading, setReadingState] = useState<Record<string, ReadingSpot>>({})
   /** 正在给哪个文件夹挑图标（null = 没开） */
   const [iconTarget, setIconTarget] = useState<string | null>(null)
   /** 上次读到的 `.zzq` 原文。写回时以它为底合并，别把不认识的字段冲掉 */
@@ -468,6 +473,7 @@ export function App() {
       vaultRaw.current = raw
       setPins(meta.pins)
       setIcons(iconsOf(meta))
+      setReadingState(readingsOf(meta))
 
       // 第一次把这个文件夹当仓库用：把账本建出来
       if (!loaded.hasMark) {
@@ -783,7 +789,48 @@ export function App() {
 
   /** 左栏点文件：开在**焦点栏**里，并且是切换语义 */
   function openNote(path: string) {
+    // 电子书不进标签页：直接复制进书架、切过去打开（书架没就绪时才落到说明页）
+    if (isEpubPath(path)) {
+      void openRepoEpub(path)
+      return
+    }
     openInPane(focused, path, 'switch')
+  }
+
+  /**
+   * 从仓库里直接读一本 EPUB。
+   *
+   * 书架才是书的家：这里读字节 → 交给 `shelf.importFiles`（按内容判重，
+   * 已经在书架里的不会重复复制）→ 切到书架工作区打开。
+   * 全程不写仓库、不改原文件。
+   */
+  async function openRepoEpub(path: string) {
+    if (phase.t !== 'ready') return
+    const name = path.split('/').pop() ?? 'book.epub'
+    if (shelf.status !== 'ready') {
+      openInPane(focused, path, 'switch')
+      say('warn', '书架还没准备好：先去左侧「书架」选个目录，再点这本书')
+      return
+    }
+    if (shelf.importing) {
+      say('warn', '正在导入别的书，等这一批结束再点')
+      return
+    }
+    try {
+      const bytes = await phase.host.read(path)
+      const results = await shelf.importFiles([{ kind: 'bytes', name, bytes }])
+      const hit = results.find((r) => r.ok && r.bookId)
+      if (!hit?.bookId) {
+        const why = results.find((r) => !r.ok)?.message ?? '导入失败'
+        say('error', `打不开《${name}》：${why}`)
+        return
+      }
+      setSpace('shelf')
+      openShelfBook(hit.bookId)
+      say('ok', hit.duplicate ? '这本书已经在书架里，直接打开了' : '已复制一份到书架，仓库原文件没动')
+    } catch (e) {
+      say('error', `打不开《${name}》：${String(e)}`)
+    }
   }
 
   function openInNewTab(path: string) {
@@ -1009,6 +1056,13 @@ export function App() {
       setIcons(iconsOf({ ...meta, files }))
       void writeVaultMeta({ pins: nextPins, files })
     }
+  }
+
+  /** PDF 翻到第几页 / 缩放到多少 —— 记进 .zzq，下次打开接着读 */
+  function saveReading(path: string, spot: ReadingSpot) {
+    const next = setReading(parseVault(vaultRaw.current), path, spot)
+    setReadingState(readingsOf(next))
+    void writeVaultMeta({ files: next.files })
   }
 
   function doRename(path: string, name: string): string | null {
@@ -1240,24 +1294,6 @@ export function App() {
     if (r === 'dup') say('warn', '这个位置已经有书签了')
     else if (r === 'missing') say('error', '这本书不在当前书架里（可能刚换过目录）')
     else say('ok', '已加书签')
-  }
-
-  /** 仓库里的 EPUB：复制一份进书架，然后切过去打开。仓库文件不动 */
-  async function addRepoEpubToShelf(path: string) {
-    if (phase.t !== 'ready') return
-    const name = path.split('/').pop() ?? 'book.epub'
-    try {
-      const bytes = await phase.host.read(path)
-      const results = await shelf.importFiles([{ kind: 'bytes', name, bytes }])
-      const hit = results.find((r) => r.ok && r.bookId)
-      if (hit?.bookId) {
-        setSpace('shelf')
-        openShelfBook(hit.bookId)
-        say('ok', `已把《${name}》加进书架（复制了一份，仓库原文件没动）`)
-      }
-    } catch (e) {
-      say('error', `加进书架失败：${String(e)}`)
-    }
   }
 
   /* ───────────────────────── 仓库：reveal / 复制路径 ───────────────────────── */
@@ -1689,10 +1725,12 @@ export function App() {
                     pane.active && noteDocs.includes(pane.active) ? pane.active : null
                   }
                   onNotice={(text) => say('warn', text)}
-                  onAddToShelf={(p) => void addRepoEpubToShelf(p)}
+                  onAddToShelf={(p) => void openRepoEpub(p)}
                   onOpenShelf={() => setSpace('shelf')}
                   shelfCanAdd={shelf.status === 'ready' && !shelf.importing}
                   shelfBusy={shelf.importing}
+                  reading={reading}
+                  onPdfPosition={saveReading}
                   shelfReason={
                     shelf.status === 'setup'
                       ? '先到左侧「书架」选一个书架目录，再回来添加'

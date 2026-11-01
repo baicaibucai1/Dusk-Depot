@@ -93,6 +93,7 @@ $STUB = @"
     '素材/文档.pdf': { b64: '$pdfB64' },
     '素材/坏图.png': { b64: '$badB64' },
   };
+  window.__files = files;
   const enc = new TextEncoder();
   function bytesOf(p) {
     const f = files[p];
@@ -116,15 +117,22 @@ $STUB = @"
       }
     });
     def('getDirectoryHandle', async (n) => mk(path ? path + '/' + n : n));
-    def('getFileHandle', async (n) => {
+    def('getFileHandle', async (n, opts) => {
       const full = path ? path + '/' + n : n;
-      if (!(full in files)) throw new DOMException('not found', 'NotFoundError');
+      // 支持 create —— 没有它，第一次写 .zzq 就会 NotFound
+      if (!(full in files) && !(opts && opts.create)) throw new DOMException('not found', 'NotFoundError');
+      if (!(full in files)) files[full] = { text: '' };
       return {
         async getFile() { return new File([bytesOf(full)], n) },
         async createWritable() {
           let buf = '';
+          const dec = new TextDecoder();
           return {
-            async write(d) { buf += d instanceof Blob ? await d.text() : String(d) },
+            async write(d) {
+              if (d instanceof Blob) buf += await d.text();
+              else if (typeof d === 'string') buf += d;
+              else buf += dec.decode(d);
+            },
             async close() { files[full] = { text: buf }; window.__log.push('write:' + full) },
           };
         },
@@ -189,7 +197,9 @@ Start-Sleep -Milliseconds 2600
 $pdfN = Num 'document.querySelectorAll("[data-dd-pdf]").length'
 Check '出现 PDF 查看器' ($pdfN -eq 1) "n=$pdfN"
 $pdfText = Eval 'document.querySelector("[data-dd-pdf]") ? document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ") : "none"'
-Check '页码显示 1 / 2' ([bool]($pdfText -match '1 / 2')) "text=$pdfText"
+$readPage = 'document.querySelector("[data-dd-pdf] input[aria-label=跳到页码]")?.value ?? ""'
+$pageVal = Eval $readPage
+Check '页码显示 1 / 2' (($pageVal -eq '1') -and [bool]($pdfText -match '/\s*2')) "page=$pageVal text=$pdfText"
 $pageBoxes = Num 'document.querySelectorAll("[data-dd-pdf] [data-page-no]").length'
 Check '两页排在同一条滚动流里（不是单页翻）' ($pageBoxes -eq 2) "n=$pageBoxes"
 $cw = Num 'document.querySelectorAll("[data-dd-pdf] [data-page-no=\"1\"] canvas")[0]?.width ?? 0'
@@ -261,8 +271,8 @@ for ($i = 0; $i -lt 4; $i++) {
 Start-Sleep -Milliseconds 2200
 $scrolled = Num "Math.round(document.querySelector('[data-dd-pdf]').lastElementChild.scrollTop)"
 Check '滚轮能把长页滚下去（scrollTop > 0）' ($scrolled -gt 40) "top=$scrolled"
-$pdfText2 = Eval 'document.querySelector("[data-dd-pdf]").innerText.replace(/\n/g, " / ")'
-Check '滚到第 2 页时页码变 2 / 2' ([bool]($pdfText2 -match '2 / 2')) "text=$pdfText2"
+$pageVal2 = Eval $readPage
+Check '滚到第 2 页时页码跟着变' ($pageVal2 -eq '2') "page=$pageVal2"
 $lt = Eval 'document.querySelector("[data-page-no=\"2\"] [data-dd-pdf-text]")?.textContent ?? "none"'
 Check '第 2 页文本层跟着渲染' ([bool]($lt -match 'Page 2')) "text=$lt"
 
@@ -297,7 +307,41 @@ Check '回到适合宽度' ([bool]($pdfText3 -match '适合')) "text=$pdfText3"
 Check '适合宽度下画布宽度回到容器内' ($wFit -gt $w3) "$w3 → $wFit"
 Shot 'pdf-pages-fit'
 
-Write-Host 'C4. 窄窗（1024×768）'
+Write-Host 'C4. 页码输入跳转 / 记住位置'
+# 回到第 1 页（当前停在第 2 页）
+$readPageInput = 'document.querySelector(''[data-dd-pdf] input[aria-label="跳到页码"]'')'
+$setOne = '(() => { const el = ' + $readPageInput + '; if (!el) return "no"; const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; set.call(el, "1"); el.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()'
+$r1 = Eval $setOne
+Start-Sleep -Milliseconds 250
+$pressEnter = '(() => { const el = ' + $readPageInput + '; if (!el) return "no"; el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); return "ok"; })()'
+$r2 = Eval $pressEnter
+Start-Sleep -Milliseconds 900
+$topAfterJump = Num "Math.round(document.querySelector('[data-dd-pdf]').lastElementChild.scrollTop)"
+$pageAfterJump = Eval $readPage
+Check '输页码 1 回车能跳回第 1 页' (($pageAfterJump -eq '1') -and ($topAfterJump -lt 60)) "page=$pageAfterJump top=$topAfterJump typed=$r1/$r2"
+
+# 滚到第 2 页，等它把位置写进 .zzq
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseWheel'; x = $mx; y = $my; deltaX = 0; deltaY = 900 })
+Start-Sleep -Milliseconds 1800
+$readSpot = '(() => { try { const m = JSON.parse(window.__files[".zzq"].text); const r = m.files["素材/文档.pdf"]?.reading; return JSON.stringify(r || null) } catch (e) { return "ERR " + e } })()'
+$savedSpot = Eval $readSpot
+Check '阅读位置写进了 .zzq' ([bool]($savedSpot -match '"page":2')) "spot=$savedSpot"
+
+# 切到图片再切回来：应当回到第 2 页
+[void](ClickRow '图.png')
+Start-Sleep -Milliseconds 700
+[void](ClickRow '文档.pdf')
+Start-Sleep -Milliseconds 2200
+$pageBack = Eval $readPage
+Check '切回来还停在第 2 页' ($pageBack -eq '2') "page=$pageBack"
+
+# 缩放也记住了
+[void](ClickIn '[data-dd-pdf]' '实际大小')
+Start-Sleep -Milliseconds 1400
+$zoomSaved = Eval $readSpot
+Check '缩放倍率也记下来了' ([bool]($zoomSaved -match '"zoom":1')) "spot=$zoomSaved"
+
+Write-Host 'C5. 窄窗（1024×768）'
 [void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 1024; height = 768; deviceScaleFactor = 1; mobile = $false })
 Start-Sleep -Milliseconds 800
 Check '1024 下整页没有横向溢出' ((Eval 'document.documentElement.scrollWidth <= window.innerWidth') -eq $true) "sw=$(Eval 'document.documentElement.scrollWidth') vw=$(Eval 'window.innerWidth')"
