@@ -21,6 +21,8 @@ export type FileKind =
   | 'pdf'
   /** EPUB 电子书：**不在文件区读**，交给书架 */
   | 'epub'
+  /** 白板：独立文件，用白板编辑器打开（不是普通文本） */
+  | 'board'
   /** 压缩包 */
   | 'archive'
   /** 认不出的 */
@@ -33,6 +35,7 @@ const EXT_KIND: Record<string, FileKind> = {
   '.log': 'text',
   '.pdf': 'pdf',
   '.epub': 'epub',
+  '.board': 'board',
   '.ts': 'code',
   '.tsx': 'code',
   '.js': 'code',
@@ -85,6 +88,14 @@ export function canEdit(path: string): boolean {
 /** 电子书：文件区只显示一条"去书架"的说明，绝不当文本打开 */
 export function isEpubPath(path: string): boolean {
   return kindOf(path) === 'epub'
+}
+
+/**
+ * 白板：文件区认得、能建、能改名，但**绝不当文本打开** ——
+ * 中间区域用白板编辑器，文件树里也只显示成一条，不把它内部的块摊开成文档。
+ */
+export function isBoardPath(path: string): boolean {
+  return kindOf(path) === 'board'
 }
 
 /** 能在中间工作区**只读预览**的类型；其余交给系统程序 */

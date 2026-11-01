@@ -30,6 +30,8 @@ type Props = {
   onNewNote: (dir: string) => string | null
   /** 新建一篇文档流富文本笔记（`.note` v2）。返回新路径或 null */
   onNewNoteDoc: (dir: string) => string | null
+  /** 新建一块白板（`.board`）。返回新路径或 null */
+  onNewBoard: (dir: string) => string | null
   onNewFolder: (dir: string) => string | null
   /** 改名。返回错误消息；成功返回 null */
   onRename: (path: string, name: string) => string | null
@@ -43,6 +45,11 @@ type Props = {
   /** 搬家到某个目录（`''` = 根）。返回错误消息；成功返回 null */
   onMove: (path: string, destDir: string) => string | null
   onDelete: (path: string) => void
+  /**
+   * 这个路径的删除确认**由外面接管**（返回 true 就不再弹这里的确认框）。
+   * 白板要用：删之前得查有没有 `.note` 引用它、要不要连附件一起删。
+   */
+  handlesDelete?: (path: string) => boolean
 
   /** 自定义图标：路径 → emoji 字符（存在 .zzq 里） */
   icons: Record<string, string>
@@ -105,6 +112,7 @@ export function TreePanel({
   onOpenSplit,
   onNewNote,
   onNewNoteDoc,
+  onNewBoard,
   onNewFolder,
   onRename,
   canReveal,
@@ -113,6 +121,7 @@ export function TreePanel({
   onDropFiles,
   onMove,
   onDelete,
+  handlesDelete,
   icons,
   onSetIcon,
   onPickIcon,
@@ -137,6 +146,8 @@ export function TreePanel({
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropDir, setDropDir] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  /** 「移动到…」选中的那个路径 */
+  const [moveTarget, setMoveTarget] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [vaultMenu, setVaultMenu] = useState(false)
   const input = useRef<HTMLInputElement | null>(null)
@@ -167,18 +178,24 @@ export function TreePanel({
     fail(onRename(old, value))
   }
 
-  function startCreate(dir: string, kind: 'note' | 'noteDoc' | 'folder') {
+  function startCreate(dir: string, kind: 'note' | 'noteDoc' | 'board' | 'folder') {
     // 新建是"一键建、零输入"，名字进来再改
     const made =
-      kind === 'note' ? onNewNote(dir) : kind === 'noteDoc' ? onNewNoteDoc(dir) : onNewFolder(dir)
+      kind === 'note'
+        ? onNewNote(dir)
+        : kind === 'noteDoc'
+          ? onNewNoteDoc(dir)
+          : kind === 'board'
+            ? onNewBoard(dir)
+            : onNewFolder(dir)
     if (!made) {
-      setErr(kind === 'noteDoc' ? '新建块笔记失败' : '新建失败')
+      setErr(kind === 'noteDoc' ? '新建块笔记失败' : kind === 'board' ? '新建白板失败' : '新建失败')
       return
     }
     const name = made.slice(made.lastIndexOf('/') + 1)
     setRename({
       path: made,
-      value: kind === 'folder' ? name : name.replace(/\.(md|note)$/i, ''),
+      value: kind === 'folder' ? name : name.replace(/\.(md|note|board)$/i, ''),
     })
   }
 
@@ -189,6 +206,7 @@ export function TreePanel({
     const items: MenuItem[] = [
       { label: '新建笔记', onSelect: () => startCreate(dir, 'note') },
       { label: '新建块笔记（纵向画布）', onSelect: () => startCreate(dir, 'noteDoc') },
+      { label: '新建白板（.board）', onSelect: () => startCreate(dir, 'board') },
       { label: '新建文件夹', onSelect: () => startCreate(dir, 'folder') },
     ]
 
@@ -196,12 +214,18 @@ export function TreePanel({
       // 只有文件才有"打开"这回事
       if (!isDir) {
         items.push(
+          { label: '打开', onSelect: () => onOpen(path) },
           { label: '在新标签页打开', onSelect: () => onOpenTab(path) },
           { label: '在右侧分栏打开', onSelect: () => onOpenSplit(path) },
         )
       }
-      // 改名走的是"文本文件按差异重写"那条路；图片/PDF 不在其中 —— 不给这个入口
-      const canRename = isDir || isNote(path) || path.toLowerCase().endsWith('.note')
+      // 改名走的是"文本文件按差异重写"那条路；图片/PDF 不在其中 —— 不给这个入口。
+      // `.board` 是单个 JSON 文件，改名只是搬文件本身（内容由白板编辑器维护）。
+      const canRename =
+        isDir ||
+        isNote(path) ||
+        path.toLowerCase().endsWith('.note') ||
+        path.toLowerCase().endsWith('.board')
       items.push(
         { label: '', onSelect: () => {}, divider: true },
         ...(canRename
@@ -212,6 +236,8 @@ export function TreePanel({
               },
             ]
           : []),
+        // 拖拽也能移动；这条是给"不想拖"和键盘用户的
+        { label: '移动到…', disabled: !canRename, reason: '这个文件类型不支持搬家', onSelect: () => setMoveTarget(path) },
         {
           label: '复制相对路径',
           onSelect: () => onCopyPath(path),
@@ -234,7 +260,11 @@ export function TreePanel({
                 : []),
             ]
           : []),
-        { label: '删除', danger: true, onSelect: () => setPendingDelete(path) },
+        { label: '删除', danger: true, onSelect: () => {
+            // 白板要查引用、要问附件 —— 交给外面那个更细的确认框
+            if (handlesDelete?.(path)) onDelete(path)
+            else setPendingDelete(path)
+          } },
       )
     }
 
@@ -318,7 +348,7 @@ export function TreePanel({
       return (
         <div key={n.path}>
           <div
-            draggable={!editing && (isDir || isNote(n.path))}
+            draggable={!editing && (isDir || isNote(n.path) || /\.board$/i.test(n.path))}
             onDragStart={(e) => {
               setDragging(n.path)
               e.dataTransfer.effectAllowed = 'move'
@@ -588,6 +618,19 @@ export function TreePanel({
         </div>
       ) : null}
 
+      {moveTarget ? (
+        <MoveDialog
+          path={moveTarget}
+          dirs={allDirsOf(tree).filter((d) => d !== moveTarget && !d.startsWith(`${moveTarget}/`))}
+          onClose={() => setMoveTarget(null)}
+          onPick={(dir) => {
+            const from = moveTarget
+            setMoveTarget(null)
+            fail(onMove(from, dir))
+          }}
+        />
+      ) : null}
+
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} items={menuFor(menu.path)} onClose={() => setMenu(null)} />
       ) : null}
@@ -606,4 +649,79 @@ function treeIsDir(nodes: TreeNode[], path: string): boolean {
     }
   }
   return false
+}
+
+/** 树上所有目录（含根，根用空串表示） */
+function allDirsOf(nodes: TreeNode[]): string[] {
+  const out = ['']
+  const walk = (list: TreeNode[]) => {
+    for (const n of list) {
+      if (n.kind !== 'dir') continue
+      out.push(n.path)
+      if (n.children) walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
+}
+
+/**
+ * 「移动到…」：拖拽之外的另一条路。
+ * 键盘用户、触控板不好拖的时候得有个能点的入口 —— 而且它比拖拽更不容易放错地方。
+ */
+function MoveDialog({
+  path,
+  dirs,
+  onPick,
+  onClose,
+}: {
+  path: string
+  dirs: string[]
+  onPick: (dir: string) => void
+  onClose: () => void
+}) {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-ink/25 p-6" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="移动到"
+        className="flex max-h-[70vh] w-[420px] flex-col rounded-xl border border-line bg-surface shadow-[0_18px_44px_rgba(16,35,28,0.2)]"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onClose()
+        }}
+      >
+        <div className="shrink-0 border-b border-line px-4 py-3">
+          <p className="text-[13px] font-medium text-ink">把「{name}」移到…</p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-3">
+            只换所在的文件夹，名字和内容都不动。
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+          {dirs.map((d) => (
+            <button
+              key={d || 'root'}
+              type="button"
+              onClick={() => onPick(d)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] text-ink-2 hover:bg-surface-2"
+            >
+              <IconChevron className="size-3 shrink-0 -rotate-90 text-ink-3/70" />
+              <span className="truncate">{d || '仓库根目录'}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 justify-end border-t border-line px-4 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-ink-2 hover:bg-surface-2"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }

@@ -15,6 +15,7 @@ import { decodeBytes } from '../core/model/text'
 import { type NoteDoc, inferNoteMarker, parseNoteDoc, readNoteMarker } from '../core/note/format'
 import { type FlowDoc, parseFlowDoc } from '../core/note/flowDoc'
 import { BOARD_ASSETS, type BoardDoc, parseBoardDoc } from '../core/note/board'
+import type { BoardEntry } from '../core/board/refs'
 import type { FlowBlock } from '../core/note/flow'
 import type { Host } from '../core/ports/host'
 import { putImage, resolveImage } from './markdown/imageStore'
@@ -38,6 +39,10 @@ type Props = {
   onJump?: (target: string, kind: JumpKind) => void
   /** 链接编辑里可以选的笔记清单 */
   notes?: { path: string; title: string }[]
+  /** 仓库里的白板索引：`.note` 的白板引用块靠它解析 */
+  boards?: BoardEntry[]
+  onOpenBoard?: (path: string) => void
+  onCreateBoard?: (dir: string) => { path: string; boardId: string } | null
 }
 
 type Loaded =
@@ -56,7 +61,7 @@ function flowImages(blocks: Record<string, FlowBlock>): string[] {
   return out
 }
 
-export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
+export function NoteEditor({ host, dir, onInfo, onJump, notes, boards, onOpenBoard, onCreateBoard }: Props) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -149,6 +154,9 @@ export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
           doc={loaded.doc}
           warnings={loaded.warnings}
           onInfo={onInfo}
+          boards={boards}
+          onOpenBoard={onOpenBoard}
+          onCreateBoard={onCreateBoard}
         />
       )
     }
@@ -167,7 +175,7 @@ export function NoteEditor({ host, dir, onInfo, onJump, notes }: Props) {
       )
     }
     return <CanvasNote key={dir} host={host} dir={dir} doc={loaded.doc} onInfo={onInfo} readOnly />
-  }, [loaded, host, dir, onInfo, onJump, notes])
+  }, [loaded, host, dir, onInfo, onJump, notes, boards, onOpenBoard, onCreateBoard])
 
   if (error) {
     return (

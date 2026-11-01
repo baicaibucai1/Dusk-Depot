@@ -160,9 +160,9 @@ Write-Host 'A. 文件树：md / 图片 / PDF 各归各类'
 $rows = Eval '[...document.querySelectorAll("[data-dd-files] button")].map((b) => b.textContent.trim()).filter(Boolean).join("|")'
 Check '树里有笔记、图、文档' ([bool](($rows -match '笔记') -and ($rows -match '图') -and ($rows -match '文档'))) "rows=$rows"
 $imgIcons = Num 'document.querySelectorAll("[data-dd-files] .lucide-file-image").length'
-$pdfIcons = Num 'document.querySelectorAll("[data-dd-files] .lucide-file-type").length'
+$pdfIcons = Num 'document.querySelectorAll("[data-dd-files] [data-icon=pdf]").length'
 Check '图片用 file-image 图标' ($imgIcons -ge 1) "n=$imgIcons"
-Check 'PDF 用独立图标（file-type）' ($pdfIcons -ge 1) "n=$pdfIcons"
+Check 'PDF 用专属图标（手画的 IconPdf，见 icons.tsx）' ($pdfIcons -ge 1) "n=$pdfIcons"
 
 Write-Host 'B. 打开图片：尺寸、缩放、适应'
 Check '点「图」打开图片' (ClickRow '图.png') ''

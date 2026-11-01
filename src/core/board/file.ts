@@ -1,0 +1,692 @@
+/*
+ * `.board` —— **独立白板文件**（单个 JSON 文件，不是目录）。
+ *
+ * ## 和 `.note` 的关系
+ *
+ * `.note` 是"一篇文档"，一个目录；`.board` 是一块"白板"，一个文件。
+ * `.note` 里可以放一个**白板引用块**（`boardref`），它只记 `boardId` + 路径提示，
+ * **不复制白板内容** —— 引用块和独立打开的白板永远是同一份数据，不会分叉。
+ *
+ * ## 文件长什么样
+ *
+ *   {
+ *     "app": "dusk-depot",
+ *     "format": "board",
+ *     "version": 1,
+ *     "boardId": "bd-lq3k2x",        ← 稳定身份：改名/搬家都不变，引用靠它锚定
+ *     "title": "项目白板",
+ *     "createdAt": "…", "updatedAt": "…",
+ *     "layout": { "mode": "stack", "order": ["n1","n2"] },
+ *     "blocks": { "n1": { "id": "n1", "type": "paragraph", "content": [...] } },
+ *     "links":  [ { "id": "l1", "from": "n1", "to": "n2", "type": "related", "label": "" } ]
+ *   }
+ *
+ * ## 四条底线
+ *
+ *   ① **未知字段、未知块一律原样保留**：旧版本打开新文件再保存，不能丢东西。
+ *   ② **版本超前不猜**：`version > 1` 时只报告、不解析、不写回 —— 让用户升级，
+ *      而不是拿旧逻辑把新数据重排一遍。
+ *   ③ `boardId` 一旦生成就不改：引用块、复制进白板的附件目录都挂在它上面。
+ *   ④ 这一层是**纯函数**，不碰 DOM、不碰 React，node 里能直接测。
+ */
+import { type Inline, inlineText } from '../note/flow'
+import type { Path } from '../model/path'
+import { stemOf } from '../model/path'
+
+export const BOARD_APP = 'dusk-depot'
+export const BOARD_FORMAT = 'board'
+export const BOARD_SUFFIX = '.board'
+export const BOARD_FILE_VERSION = 1
+
+/**
+ * 复制进白板的附件目录：`.dusk/board/<boardId>/`。
+ *
+ * 为什么按 boardId 而不是跟着文件名：文件改名/搬家时附件不用跟着搬，
+ * 也不会出现"`xxx.board` 旁边多出一个 `xxx.board.files/` 目录"这种噪音。
+ * `.dusk` 开头，文件树天然不列（见 core/model/path.ts 的 isHidden）。
+ */
+export const BOARD_COPY_ROOT = '.dusk/board'
+
+export type BoardLayoutMode = 'stack' | 'free'
+
+export type BoardBlockType =
+  | 'paragraph'
+  | 'heading1'
+  | 'heading2'
+  | 'todo'
+  | 'quote'
+  | 'image'
+  | 'file'
+  | 'divider'
+  | 'unknown'
+
+/** 图片 / 文件块：是复制进白板，还是只引用仓库里已有的那个文件 */
+export type BlockSource = 'copy' | 'link'
+
+/**
+ * `.note` 里白板引用块的显示方式。
+ * 定义在 `.board` 这一侧：显示方式是"白板被怎么展示"，跟着白板概念走。
+ */
+export type BoardRefView = 'compact' | 'preview'
+
+export type BoardBlock = {
+  id: string
+  type: BoardBlockType
+  /** 正文 / 标题 / 待办 / 引用：行内内容 */
+  content?: Inline[]
+  /** 待办是否勾选 */
+  checked?: boolean
+  /** 图片 / 文件：仓库内相对路径 */
+  src?: string
+  /** 文件块原始文件名（展示用；引用已有文件时也用它） */
+  name?: string
+  /** 文件字节数（展示用） */
+  size?: number
+  /** 图片 alt */
+  alt?: string
+  /** 图片来源：copy = 复制进 `.dusk/board/<id>/`；link = 只记路径 */
+  source?: BlockSource
+  /** 认不出的块：原始 JSON，保存时原样写回 */
+  raw?: Record<string, unknown>
+  /** 已知块里不认识的字段：原样保留 */
+  extra?: Record<string, unknown>
+}
+
+export type LinkType = 'related' | 'depends' | 'source' | 'custom'
+
+export const LINK_TYPES: { id: LinkType; label: string }[] = [
+  { id: 'related', label: '相关' },
+  { id: 'depends', label: '依赖' },
+  { id: 'source', label: '来源' },
+  { id: 'custom', label: '自定义' },
+]
+
+export type BoardLink = {
+  id: string
+  /** 起点块 id */
+  from: string
+  /** 终点块 id */
+  to: string
+  type: LinkType
+  /** 人写的说明 */
+  label: string
+  createdAt: number
+  /** 不认识的字段，原样保留 */
+  extra?: Record<string, unknown>
+}
+
+/** 布局：现在只有纵向堆叠；`free` 预留（坐标存在 `pos` 里，读到时原样带着） */
+export type BoardLayout = {
+  mode: BoardLayoutMode
+  /** 纵向顺序：块 id 列表 */
+  order: string[]
+  /** 自由画布的坐标，未实现但在数据里保留 */
+  pos?: Record<string, { x: number; y: number }>
+}
+
+export type BoardFileDoc = {
+  version: number
+  boardId: string
+  title: string
+  createdAt: string
+  updatedAt?: string
+  layout: BoardLayout
+  blocks: Record<string, BoardBlock>
+  links: BoardLink[]
+  /** 顶层不认识的字段：原样保留 */
+  extra?: Record<string, unknown>
+}
+
+/* ───────────────────────── 判定 ───────────────────────── */
+
+/** 白板标题的兜底：文件名去掉 `.board` */
+export function titleOfBoardPath(path: Path): string {
+  return stemOf(path) || '未命名白板'
+}
+
+export function newBoardId(now = Date.now()): string {
+  return `bd-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+}
+
+/* ───────────────────────── 解析 ───────────────────────── */
+
+function asObject(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+
+function textOfInline(v: unknown): Inline[] | null {
+  if (v === undefined) return []
+  if (!Array.isArray(v)) return null
+  const out: Inline[] = []
+  for (const raw of v) {
+    const o = asObject(raw)
+    if (!o) return null
+    if (o.type === 'hardBreak') {
+      out.push({ type: 'hardBreak' })
+      continue
+    }
+    if (o.type !== 'text' || typeof o.text !== 'string') return null
+    const marks = Array.isArray(o.marks)
+      ? o.marks
+          .map((m) => {
+            if (m === 'bold' || m === 'italic' || m === 'strike' || m === 'code') return m
+            const mo = asObject(m)
+            if (mo?.type === 'link' && typeof mo.href === 'string' && mo.href) {
+              return { type: 'link' as const, href: mo.href }
+            }
+            return null
+          })
+          .filter((m): m is NonNullable<typeof m> => Boolean(m))
+      : []
+    out.push(marks.length ? { type: 'text', text: o.text, marks } : { type: 'text', text: o.text })
+  }
+  return out
+}
+
+const KNOWN_BLOCK_FIELDS = new Set([
+  'id',
+  'type',
+  'content',
+  'checked',
+  'src',
+  'name',
+  'size',
+  'alt',
+  'source',
+])
+
+const TEXT_TYPES = new Set(['paragraph', 'heading1', 'heading2', 'todo', 'quote'])
+
+/** 一个块的 JSON → BoardBlock。结构不对的**已知类型**降级成 unknown（raw 留着），不静默变空段 */
+export function parseBlock(id: string, raw: unknown): BoardBlock {
+  const obj = asObject(raw) ?? {}
+  const type = typeof obj.type === 'string' ? obj.type : ''
+
+  const known =
+    TEXT_TYPES.has(type) || type === 'image' || type === 'file' || type === 'divider'
+
+  if (!known) return { id, type: 'unknown', raw: { ...obj, id } }
+
+  const extra: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) if (!KNOWN_BLOCK_FIELDS.has(k)) extra[k] = v
+
+  const block: BoardBlock = { id, type: type as BoardBlockType }
+  if (Object.keys(extra).length > 0) block.extra = extra
+
+  if (TEXT_TYPES.has(type)) {
+    const content = textOfInline(obj.content)
+    if (!content) return { id, type: 'unknown', raw: { ...obj, id } }
+    block.content = content
+    if (type === 'todo') block.checked = Boolean(obj.checked)
+    return block
+  }
+
+  if (type === 'image') {
+    block.src = typeof obj.src === 'string' ? obj.src : ''
+    if (typeof obj.alt === 'string' && obj.alt) block.alt = obj.alt
+    if (obj.source === 'copy' || obj.source === 'link') block.source = obj.source
+    return block
+  }
+
+  if (type === 'file') {
+    block.src = typeof obj.src === 'string' ? obj.src : ''
+    if (typeof obj.name === 'string' && obj.name) block.name = obj.name
+    if (typeof obj.size === 'number' && Number.isFinite(obj.size)) block.size = obj.size
+    if (obj.source === 'copy' || obj.source === 'link') block.source = obj.source
+    return block
+  }
+
+  return block // divider
+}
+
+function parseLink(raw: unknown, warnings: string[]): BoardLink | null {
+  const o = asObject(raw)
+  if (!o) return null
+  const from = typeof o.from === 'string' ? o.from : ''
+  const to = typeof o.to === 'string' ? o.to : ''
+  if (!from || !to) {
+    warnings.push('有一条连接缺起点或终点，已跳过（块本身没动）')
+    return null
+  }
+  const type =
+    o.type === 'related' || o.type === 'depends' || o.type === 'source' || o.type === 'custom'
+      ? o.type
+      : 'related'
+  const extra: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k !== 'id' && k !== 'from' && k !== 'to' && k !== 'type' && k !== 'label' && k !== 'createdAt') {
+      extra[k] = v
+    }
+  }
+  const link: BoardLink = {
+    id: typeof o.id === 'string' && o.id ? o.id : `l-${from}-${to}-${String(o.createdAt ?? '')}`,
+    from,
+    to,
+    type,
+    label: typeof o.label === 'string' ? o.label : '',
+    createdAt: typeof o.createdAt === 'number' && Number.isFinite(o.createdAt) ? o.createdAt : Date.now(),
+  }
+  if (Object.keys(extra).length > 0) link.extra = extra
+  return link
+}
+
+export type BoardFileParse =
+  | { kind: 'ok'; doc: BoardFileDoc; warnings: string[] }
+  /** 版本比这个程序新：只提示，不解析、不写回 */
+  | { kind: 'unsupported'; version: number; message: string }
+  /** 不是白板 / 文件坏了 */
+  | { kind: 'bad'; message: string }
+
+/**
+ * 读一块白板。
+ *
+ * `fallbackTitle` 用在标题缺失时（新建的空文件、被别的工具抹掉了 title）——
+ * 用文件名，而不是"未命名"，人一眼还能认出是哪一块。
+ */
+export function parseBoardFile(text: string, fallbackTitle = '未命名白板'): BoardFileParse {
+  if (!text.trim()) return { kind: 'bad', message: '这个 .board 文件是空的' }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return { kind: 'bad', message: '这个 .board 文件不是有效的 JSON' }
+  }
+  const o = asObject(raw)
+  if (!o) return { kind: 'bad', message: '这个 .board 的顶层不是一个对象' }
+
+  if (o.format !== BOARD_FORMAT) {
+    return { kind: 'bad', message: '这不是白板文件（缺 "format": "board" 标记）' }
+  }
+
+  const warnings: string[] = []
+  const version = typeof o.version === 'number' && Number.isFinite(o.version) ? o.version : 0
+  if (version > BOARD_FILE_VERSION) {
+    return {
+      kind: 'unsupported',
+      version,
+      message: `这块白板由更新版本（v${version}）创建，当前程序只认识 v${BOARD_FILE_VERSION}；为了不写坏它，这次不打开。请先升级 Dusk Depot。`,
+    }
+  }
+  if (version < 1) warnings.push('这份白板没写版本号，按 v1 读；保存时会补上')
+
+  const extra: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (
+      k !== 'app' &&
+      k !== 'format' &&
+      k !== 'version' &&
+      k !== 'boardId' &&
+      k !== 'title' &&
+      k !== 'createdAt' &&
+      k !== 'updatedAt' &&
+      k !== 'layout' &&
+      k !== 'blocks' &&
+      k !== 'links'
+    ) {
+      extra[k] = v
+    }
+  }
+
+  const blocks: Record<string, BoardBlock> = {}
+  const blocksRaw = o.blocks
+  if (Array.isArray(blocksRaw)) {
+    // 容错：也接受数组形式（别人的工具写出来的）
+    for (const item of blocksRaw) {
+      const obj = asObject(item)
+      const id = typeof obj?.id === 'string' && obj.id ? obj.id : ''
+      if (!obj || !id) {
+        warnings.push('有一个块没有 id，已跳过')
+        continue
+      }
+      blocks[id] = parseBlock(id, obj)
+    }
+  } else if (blocksRaw !== undefined) {
+    const asRecord = asObject(blocksRaw)
+    if (!asRecord) return { kind: 'bad', message: '这个白板的 blocks 既不是对象也不是数组' }
+    for (const [id, item] of Object.entries(asRecord)) {
+      if (!id) continue
+      blocks[id] = parseBlock(id, item)
+    }
+  }
+
+  let layout: BoardLayout = { mode: 'stack', order: [] }
+  const layoutRaw = asObject(o.layout)
+  if (layoutRaw) {
+    const mode = layoutRaw.mode === 'free' ? 'free' : 'stack'
+    const order = Array.isArray(layoutRaw.order)
+      ? layoutRaw.order.filter((x): x is string => typeof x === 'string')
+      : []
+    const pos = asObject(layoutRaw.pos) as BoardLayout['pos'] | null
+    layout = { mode, order, ...(pos ? { pos } : {}) }
+  } else if (o.layout !== undefined) {
+    warnings.push('layout 格式不对，改按块的出现顺序排；块和连接都没动')
+  }
+
+  // 顺序表里没有的块补到末尾：宁可多显示，也不静默丢块
+  for (const id of Object.keys(blocks)) if (!layout.order.includes(id)) layout.order.push(id)
+  layout.order = layout.order.filter((id) => Boolean(blocks[id]))
+  if (layout.mode === 'free' && !layout.pos) {
+    warnings.push('这块白板标记为自由排布，但坐标数据不在；先按纵向显示，数据没动')
+  }
+
+  const links: BoardLink[] = []
+  const seen = new Set<string>()
+  const linksRaw = Array.isArray(o.links) ? o.links : []
+  if (o.links !== undefined && !Array.isArray(o.links)) {
+    warnings.push('links 不是数组，连接暂时读不出来；块本身没动')
+  }
+  for (const item of linksRaw) {
+    const link = parseLink(item, warnings)
+    if (!link) continue
+    if (seen.has(link.id)) {
+      warnings.push(`连接 id 重复：${link.id}，只保留第一条`)
+      continue
+    }
+    seen.add(link.id)
+    if (!blocks[link.from] || !blocks[link.to]) {
+      // 指向不存在的块：留着比删掉安全（块可能只是暂时读不出来）
+      warnings.push('有连接指向已经不在的块，仍然保留，不会自动删')
+    }
+    links.push(link)
+  }
+
+  const doc: BoardFileDoc = {
+    version: BOARD_FILE_VERSION,
+    boardId: typeof o.boardId === 'string' && o.boardId ? o.boardId : newBoardId(),
+    title: typeof o.title === 'string' && o.title.trim() ? o.title : fallbackTitle,
+    createdAt: typeof o.createdAt === 'string' ? o.createdAt : '',
+    layout,
+    blocks,
+    links,
+  }
+  if (typeof o.updatedAt === 'string') doc.updatedAt = o.updatedAt
+  if (typeof o.boardId !== 'string' || !o.boardId) warnings.push('这块白板没有 boardId，已补一个')
+  if (Object.keys(extra).length > 0) doc.extra = extra
+
+  return { kind: 'ok', doc, warnings }
+}
+
+/* ───────────────────────── 序列化 ───────────────────────── */
+
+function serializeBlock(block: BoardBlock): Record<string, unknown> {
+  if (block.type === 'unknown') {
+    const raw = { ...(block.raw ?? {}) }
+    raw.id = block.id
+    return raw
+  }
+
+  // 先摊未知字段，再写已知字段：新版本加的字段不会因为这里保存而丢
+  const out: Record<string, unknown> = { ...(block.extra ?? {}), id: block.id, type: block.type }
+  switch (block.type) {
+    case 'paragraph':
+    case 'heading1':
+    case 'heading2':
+    case 'quote':
+      out.content = block.content ?? []
+      break
+    case 'todo':
+      out.checked = Boolean(block.checked)
+      out.content = block.content ?? []
+      break
+    case 'image':
+      out.src = block.src ?? ''
+      if (block.alt) out.alt = block.alt
+      if (block.source) out.source = block.source
+      break
+    case 'file':
+      out.src = block.src ?? ''
+      if (block.name) out.name = block.name
+      if (typeof block.size === 'number') out.size = block.size
+      if (block.source) out.source = block.source
+      break
+    default:
+      break
+  }
+  return out
+}
+
+/** 一块白板 → 文件文本。键序固定：手写 diff 时不会满屏噪音 */
+export function serializeBoardFile(doc: BoardFileDoc): string {
+  const layout: Record<string, unknown> = { mode: doc.layout.mode, order: doc.layout.order }
+  if (doc.layout.pos) layout.pos = doc.layout.pos
+
+  const blocks: Record<string, unknown> = {}
+  for (const id of doc.layout.order) {
+    const b = doc.blocks[id]
+    if (b) blocks[id] = serializeBlock(b)
+  }
+  // 顺序表外的块（正常不会有）也别丢
+  for (const [id, b] of Object.entries(doc.blocks)) if (!(id in blocks)) blocks[id] = serializeBlock(b)
+
+  const out: Record<string, unknown> = {
+    ...(doc.extra ?? {}),
+    app: BOARD_APP,
+    format: BOARD_FORMAT,
+    version: BOARD_FILE_VERSION,
+    boardId: doc.boardId,
+    title: doc.title,
+    createdAt: doc.createdAt,
+    ...(doc.updatedAt ? { updatedAt: doc.updatedAt } : {}),
+    layout,
+    blocks,
+    links: doc.links.map((l) => {
+      const { extra, ...rest } = l
+      return { ...(extra ?? {}), ...rest }
+    }),
+  }
+  return `${JSON.stringify(out, null, 2)}\n`
+}
+
+/** 只有内容真的变了才返回新文本（用于"保存时显示已保存，但什么都没写"） */
+export function diffBoardFile(before: string, doc: BoardFileDoc): string | null {
+  const next = serializeBoardFile(doc)
+  return next === before ? null : next
+}
+
+/* ───────────────────────── 新建 / 编辑 ───────────────────────── */
+
+export function newBoardFile(title: string, now = new Date()): BoardFileDoc {
+  return {
+    version: BOARD_FILE_VERSION,
+    boardId: newBoardId(now.getTime()),
+    title,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    layout: { mode: 'stack', order: [] },
+    blocks: {},
+    links: [],
+  }
+}
+
+export function nextBlockId(doc: BoardFileDoc): string {
+  let max = 0
+  for (const id of Object.keys(doc.blocks)) {
+    const m = /^n(\d+)$/.exec(id)
+    if (m) max = Math.max(max, Number(m[1]))
+  }
+  return `n${max + 1}`
+}
+
+export function newBlock(type: BoardBlockType, id: string): BoardBlock {
+  switch (type) {
+    case 'todo':
+      return { id, type, content: [], checked: false }
+    case 'image':
+      return { id, type, src: '', alt: '', source: 'copy' }
+    case 'file':
+      return { id, type, src: '', name: '', source: 'copy' }
+    case 'divider':
+      return { id, type }
+    case 'unknown':
+      return { id, type: 'unknown', raw: { id, type: 'unknown' } }
+    default:
+      return { id, type, content: [] }
+  }
+}
+
+export function insertBlock(doc: BoardFileDoc, afterId: string | null, block: BoardBlock): BoardFileDoc {
+  const order = [...doc.layout.order]
+  const at = afterId ? order.indexOf(afterId) : order.length - 1
+  order.splice(at + 1, 0, block.id)
+  return {
+    ...doc,
+    layout: { ...doc.layout, order },
+    blocks: { ...doc.blocks, [block.id]: block },
+  }
+}
+
+export function removeBlock(doc: BoardFileDoc, id: string): BoardFileDoc {
+  const blocks = { ...doc.blocks }
+  delete blocks[id]
+  return {
+    ...doc,
+    blocks,
+    layout: { ...doc.layout, order: doc.layout.order.filter((x) => x !== id) },
+    // 块没了，挂在它身上的连接一起收掉（连接不能指向空气）
+    links: doc.links.filter((l) => l.from !== id && l.to !== id),
+  }
+}
+
+export function updateBlock(doc: BoardFileDoc, id: string, patch: Partial<BoardBlock>): BoardFileDoc {
+  const cur = doc.blocks[id]
+  if (!cur) return doc
+  return { ...doc, blocks: { ...doc.blocks, [id]: { ...cur, ...patch, id } } }
+}
+
+/** 把块挪到第 index 个位置（插入位置语义） */
+export function moveBlockTo(doc: BoardFileDoc, id: string, index: number): BoardFileDoc {
+  const from = doc.layout.order.indexOf(id)
+  if (from < 0) return doc
+  const order = [...doc.layout.order]
+  order.splice(from, 1)
+  const to = Math.max(0, Math.min(order.length, index > from ? index - 1 : index))
+  if (to === from) return doc
+  order.splice(to, 0, id)
+  return { ...doc, layout: { ...doc.layout, order } }
+}
+
+export function duplicateBlock(doc: BoardFileDoc, id: string): { doc: BoardFileDoc; id: string } | null {
+  const block = doc.blocks[id]
+  if (!block) return null
+  const nextId = nextBlockId(doc)
+  const copy: BoardBlock = {
+    ...block,
+    id: nextId,
+    content: block.content ? block.content.map((x) => ({ ...x })) : undefined,
+    raw: block.raw ? { ...block.raw, id: nextId } : undefined,
+  }
+  return { doc: insertBlock(doc, id, copy), id: nextId }
+}
+
+export function addLink(doc: BoardFileDoc, link: BoardLink): BoardFileDoc {
+  if (link.from === link.to) return doc
+  const dup = doc.links.some(
+    (l) => l.from === link.from && l.to === link.to && l.type === link.type && l.label === link.label,
+  )
+  if (dup) return doc
+  return { ...doc, links: [...doc.links, link] }
+}
+
+export function removeLink(doc: BoardFileDoc, id: string): BoardFileDoc {
+  return { ...doc, links: doc.links.filter((l) => l.id !== id) }
+}
+
+export function linksOf(doc: BoardFileDoc, blockId: string): BoardLink[] {
+  return doc.links.filter((l) => l.from === blockId || l.to === blockId)
+}
+
+/* ───────────────────────── 展示 / 命名 ───────────────────────── */
+
+export function blockText(block: BoardBlock): string {
+  if (block.type === 'image') return block.alt || block.src?.split('/').pop() || '图片'
+  if (block.type === 'file') return block.name || block.src?.split('/').pop() || '文件'
+  if (block.type === 'divider') return '分隔线'
+  if (block.type === 'todo') return `${block.checked ? '[x]' : '[ ]'} ${inlineText(block.content ?? [])}`
+  return inlineText(block.content ?? [])
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  heading1: 'H1',
+  heading2: 'H2',
+  todo: '待办',
+  quote: '引用',
+  image: '图片',
+  file: '文件',
+  divider: '分隔线',
+  unknown: '未知块',
+  paragraph: '正文',
+}
+
+export function blockLabel(block: BoardBlock | undefined, id: string): string {
+  if (!block) return `（已删除的块 ${id}）`
+  const kind = TYPE_LABEL[block.type] ?? '正文'
+  const text = blockText(block).replace(/\s+/g, ' ').trim()
+  const short = [...text].slice(0, 24).join('')
+  return short ? `${kind} · ${short}` : `${kind} · ${id}`
+}
+
+export function boardPlainText(doc: BoardFileDoc): string {
+  return doc.layout.order
+    .map((id) => doc.blocks[id])
+    .filter((b): b is BoardBlock => Boolean(b))
+    .map((b) => blockText(b))
+    .join('\n\n')
+}
+
+export function boardOutline(doc: BoardFileDoc): { level: number; text: string }[] {
+  const out: { level: number; text: string }[] = []
+  for (const id of doc.layout.order) {
+    const b = doc.blocks[id]
+    if (!b) continue
+    if (b.type === 'heading1') out.push({ level: 1, text: blockText(b) })
+    if (b.type === 'heading2') out.push({ level: 2, text: blockText(b) })
+  }
+  return out
+}
+
+/** 复制进白板的附件放哪儿：`.dusk/board/<boardId>` */
+export function copyDirOf(boardId: string): Path {
+  return `${BOARD_COPY_ROOT}/${boardId}`
+}
+
+/** 一个附件是不是"复制进白板"的（判断 `.dusk/board/` 前缀，不看 source 字段） */
+export function isCopiedAsset(src: string): boolean {
+  return src.startsWith(`${BOARD_COPY_ROOT}/`)
+}
+
+/** `assets/…` 这类文件名清洗：去掉非法字符、限制长度 */
+export function safeFileName(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80)
+  return cleaned || '未命名'
+}
+
+/** 复制进白板的附件路径：`<dir>/<ts>-<rand>-<名字>`（同一毫秒里连续拖入也不撞名） */
+export function copyAssetPath(boardId: string, originalName: string, now = Date.now()): Path {
+  const salt = Math.random().toString(36).slice(2, 6)
+  return `${copyDirOf(boardId)}/${now.toString(36)}-${salt}-${safeFileName(originalName)}`
+}
+
+/** 白板里所有"复制进来"的附件路径（删白板时可以问用户要不要一起删） */
+export function copiedAssets(doc: BoardFileDoc): Path[] {
+  const out = new Set<Path>()
+  for (const b of Object.values(doc.blocks)) {
+    if ((b.type === 'image' || b.type === 'file') && b.src && isCopiedAsset(b.src)) out.add(b.src)
+  }
+  return [...out]
+}
+
+/** 哪些块引用了这个附件（删块时判断孤不孤） */
+export function assetRefs(doc: BoardFileDoc, asset: Path): string[] {
+  return doc.layout.order.filter((id) => {
+    const b = doc.blocks[id]
+    return Boolean(b && (b.type === 'image' || b.type === 'file') && b.src === asset)
+  })
+}

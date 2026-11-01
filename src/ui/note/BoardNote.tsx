@@ -36,9 +36,12 @@ import {
   updateBoardBlock,
 } from '../../core/note/board'
 import { encodeText } from '../../core/model/text'
+import { parentOf } from '../../core/model/path'
 import type { Host } from '../../core/ports/host'
+import type { BoardEntry } from '../../core/board/refs'
 import type { NoteInfo } from '../NoteEditor'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
+import { BoardPickDialog } from '../board/BoardPickDialog'
 import { BoardCard } from './BoardCard'
 import { RelationDialog } from './RelationDialog'
 
@@ -48,6 +51,12 @@ type Props = {
   doc: BoardDoc
   warnings?: string[]
   onInfo?: (dir: string, info: NoteInfo) => void
+  /** 仓库里的白板索引：引用块靠它按 boardId 找到那块白板 */
+  boards?: BoardEntry[]
+  /** 打开一块白板（点引用块 / 菜单里） */
+  onOpenBoard?: (path: string) => void
+  /** 新建一块白板并返回它的身份；`null` = 建失败 */
+  onCreateBoard?: (dir: string) => { path: string; boardId: string } | null
 }
 
 type Status = 'saved' | 'dirty' | 'saving' | 'error'
@@ -76,7 +85,7 @@ function noticeOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
+export function BoardNote({ host, dir, doc, warnings, onInfo, boards = [], onOpenBoard, onCreateBoard }: Props) {
   const [data, setData] = useState<BoardDoc>(doc)
   const [title, setTitle] = useState(doc.meta.title)
   const [status, setStatus] = useState<Status>('saved')
@@ -92,6 +101,10 @@ export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
   const [flashId, setFlashId] = useState<string | null>(null)
   const [assetAsk, setAssetAsk] = useState<AssetAsk | null>(null)
   const [hideWarnings, setHideWarnings] = useState(false)
+  /** 白板选择器：insert = 在末尾插一个引用块；relocate = 给某个引用块重新定位 */
+  const [boardPick, setBoardPick] = useState<{ mode: 'insert' } | { mode: 'relocate'; blockId: string } | null>(
+    null,
+  )
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
@@ -309,6 +322,38 @@ export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
     setFocusId(id)
   }
 
+  /** 插入一个白板引用块。只记身份 + 路径提示 + 显示方式，**不复制白板内容** */
+  const insertBoardRef = (target: { path: string; boardId: string }) => {
+    const cur = docRef.current
+    const id = nextBoardId(cur)
+    const block: BoardBlock = {
+      ...newBoardBlock('boardref', id),
+      boardId: target.boardId,
+      path: target.path,
+      view: 'compact',
+    }
+    commit(insertBoardBlock(cur, cur.order[cur.order.length - 1] ?? null, block))
+    setFocusId(id)
+  }
+
+  /** 引用块重新定位：换 boardId 和路径提示，块本身和顺序都不动 */
+  const relocateBoard = (blockId: string, target: { path: string; boardId: string }) => {
+    patchBlock(blockId, { boardId: target.boardId, path: target.path })
+  }
+
+  const onCreateBoardHere = () => {
+    if (!onCreateBoard) return
+    // 新白板放在这篇笔记旁边（同一层目录），别默认丢到仓库根
+    const made = onCreateBoard(parentOf(dir))
+    if (!made) {
+      setNotice('新建白板失败：看下文件栏的提示')
+      return
+    }
+    if (boardPick?.mode === 'relocate') relocateBoard(boardPick.blockId, made)
+    else insertBoardRef(made)
+    setBoardPick(null)
+  }
+
   const handleDrop = () => {
     const cur = docRef.current
     if (dragId && dropAt) {
@@ -378,19 +423,46 @@ export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
     if (block.type === 'file') {
       items.splice(2, 0, { label: '更换文件…', onSelect: () => requestAsset('file', id, null) })
     }
+    if (block.type === 'boardref') {
+      items.splice(2, 0,
+        {
+          label: block.view === 'preview' ? '改成紧凑卡片' : '改成预览卡片',
+          onSelect: () => patchBlock(id, { view: block.view === 'preview' ? 'compact' : 'preview' }),
+        },
+        {
+          label: '重新定位到别的白板…',
+          onSelect: () => setBoardPick({ mode: 'relocate', blockId: id }),
+        },
+      )
+    }
     items.push({ divider: true, label: '', onSelect: () => {} })
     items.push({ label: '删除这个块', danger: true, onSelect: () => deleteBlock(id) })
     return items
   }
 
-  const addMenuItems = (afterId: string | null): MenuItem[] =>
-    ADD_TYPES.map((t) => ({
+  const addMenuItems = (afterId: string | null): MenuItem[] => [
+    ...ADD_TYPES.map((t) => ({
       label: t.label,
       onSelect: () => {
         if (t.type === 'image' || t.type === 'file') requestAsset(t.type, undefined, afterId)
         else addBlock(t.type, afterId)
       },
-    }))
+    })),
+    { divider: true, label: '', onSelect: () => {} },
+    { label: '引用白板…', onSelect: () => setBoardPick({ mode: 'insert' }) },
+    {
+      label: '新建白板并引用',
+      onSelect: () => {
+        if (!onCreateBoard) {
+          setNotice('这里没法新建白板：仓库还没准备好')
+          return
+        }
+        const made = onCreateBoard(parentOf(dir))
+        if (made) insertBoardRef(made)
+        else setNotice('新建白板失败：看下文件栏的提示')
+      },
+    },
+  ]
 
   const addAt = (x: number, y: number) => setAddMenu({ x, y })
   const lastId = data.order.length ? (data.order[data.order.length - 1] ?? null) : null
@@ -556,6 +628,9 @@ export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
                       onShowRelations={() => setShowRelations(true)}
                       onMove={moveBlock}
                       onNotice={setNotice}
+                      boards={boards}
+                      onOpenBoard={onOpenBoard}
+                      onRelocateBoard={(blockId) => setBoardPick({ mode: 'relocate', blockId })}
                     />
                     {dropAt && dropAt.index === index && dropAt.after ? <DropLine /> : null}
                   </Fragment>
@@ -698,6 +773,29 @@ export function BoardNote({ host, dir, doc, warnings, onInfo }: Props) {
             .map((b) => ({ id: b.id, label: blockLabel(b, b.id) }))}
           onSave={saveRelation}
           onClose={() => setRelationFrom(null)}
+        />
+      ) : null}
+
+      {boardPick ? (
+        <BoardPickDialog
+          title={boardPick.mode === 'insert' ? '引用一块白板' : '重新定位白板引用'}
+          hint={
+            boardPick.mode === 'insert'
+              ? '引用块只记这块白板本身，不复制内容 —— 在白板里改完，这里再看就是最新的。'
+              : '选一块新的白板替换原来的指向。引用块的位置和顺序不变。'
+          }
+          boards={boards}
+          currentId={
+            boardPick.mode === 'relocate' ? data.blocks[boardPick.blockId]?.boardId : undefined
+          }
+          onCreate={onCreateBoard ? onCreateBoardHere : undefined}
+          onPick={(entry) => {
+            const target = { path: entry.path, boardId: entry.boardId }
+            if (boardPick.mode === 'insert') insertBoardRef(target)
+            else relocateBoard(boardPick.blockId, target)
+            setBoardPick(null)
+          }}
+          onClose={() => setBoardPick(null)}
         />
       ) : null}
 

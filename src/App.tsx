@@ -3,11 +3,20 @@ import type { Snapshot } from './core/model/flush'
 import { diffRepo, flushRepo, settleBaseline } from './core/model/flush'
 import type { FileMap } from './core/model/library'
 import { buildTreeFromEntries, isNote } from './core/model/library'
-import { isEpubPath, kindOf, previewOf } from './core/model/fileKind'
+import { isEpubPath, isBoardPath, kindOf, previewOf } from './core/model/fileKind'
 import { isNoteDocPath } from './core/note/format'
 import { BOARD_ASSETS, boardFiles, emptyBoardDoc } from './core/note/board'
+import {
+  copiedAssets,
+  copyDirOf,
+  newBoardFile,
+  parseBoardFile,
+  serializeBoardFile,
+  titleOfBoardPath,
+} from './core/board/file'
+import { type BoardEntry, refsOfBoard, scanBoardRefs } from './core/board/refs'
 import { folderPath, notePath, sanitizeName, uniquePath } from './core/model/note'
-import { parentOf, stemOf } from './core/model/path'
+import { nameOf, parentOf, stemOf } from './core/model/path'
 import { deleteEntry, moveEntry, renameEntry, type EditOk } from './core/model/rename'
 import { resolvePath, resolveWiki, titleOf, wikiSection } from './core/markdown/links'
 import { outlineOf } from './core/markdown/parse'
@@ -61,6 +70,7 @@ import { ShelfPanel } from './ui/shelf/ShelfPanel'
 import { ShelfMain } from './ui/shelf/ShelfMain'
 import { ShelfAside } from './ui/shelf/ShelfAside'
 import { ShelfMoveDialog } from './ui/shelf/ShelfMoveDialog'
+import { BoardDeleteDialog } from './ui/board/BoardDeleteDialog'
 import { useShelf } from './ui/shelf/useShelf'
 import type { ReaderApi, ReaderLocation, ReaderSettings } from './ui/shelf/EpubReader'
 import type { TocItem } from './core/shelf/epub'
@@ -111,10 +121,15 @@ function allDirs(nodes: ReturnType<typeof buildTreeFromEntries>): string[] {
   return nodes.flatMap((n) => (n.kind === 'dir' ? [n.path, ...allDirs(n.children ?? [])] : []))
 }
 
-/** `.zzq` 里写的东西：一眼能看出这是谁的标记 */
+/**
+ * `.zzq` 里写的东西：一眼能看出这是谁的标记。
+ *
+ * 白板（`.board`）**只读一次头**：标题和 boardId 要在文件树/引用块里用，
+ * 但块内容不进内存表 —— 白板由它自己的编辑器按需读写，和图片/PDF 一个路子。
+ */
 async function readRepo(
   host: Host,
-): Promise<Snapshot & { hasMark: boolean; notes: string[]; assets: string[] }> {
+): Promise<Snapshot & { hasMark: boolean; notes: string[]; assets: string[]; boards: BoardEntry[] }> {
   const entries = await host.list()
 
   /*
@@ -127,7 +142,7 @@ async function readRepo(
   const underNote = (p: string) => noteRoots.some((root) => p === root || p.startsWith(`${root}/`))
 
   /*
-   * 树里收四类：目录、md、**能预览的**图片 / PDF，以及 `.epub`。
+   * 树里收五类：目录、md、**能预览的**图片 / PDF、`.epub`，以及 `.board`。
    *
    * `.epub` 收进来不是为了读 —— 是为了让人点开时看到"这里不读电子书，
    * 请去书架"，并且能一键加进书架。否则它只会在树里凭空消失，像丢了一样。
@@ -137,21 +152,24 @@ async function readRepo(
    *
    * 图片和 PDF **只记路径**，不在这里读字节 —— 一个库里有几百张图时，
    * 打开仓库那一刻全读进内存是没道理的。真打开时再由查看器按需读。
+   * 白板同理，只读一个小头部（标题 + boardId）。
    */
   const keep = entries.filter((e) => {
     if (underNote(e.path)) return false
     if (!isListable(e.path)) return false
     if (e.kind === 'dir') return true
-    return isNote(e.path) || previewOf(e.path) !== null || isEpubPath(e.path)
+    return (
+      isNote(e.path) || previewOf(e.path) !== null || isEpubPath(e.path) || isBoardPath(e.path)
+    )
   })
   const assets = keep
-    .filter((e) => e.kind === 'file' && !isNote(e.path))
+    .filter((e) => e.kind === 'file' && !isNote(e.path) && !isBoardPath(e.path))
     .map((e) => e.path)
 
   const files: FileMap = {}
   for (const e of keep) {
     if (e.kind !== 'file') continue
-    // 图片 / PDF 不进 FileMap：那张表只装**文本**，二进制进去就是乱码
+    // 图片 / PDF / 白板不进 FileMap：那张表只装**文本**
     if (!isNote(e.path)) continue
     try {
       // 体积上限在这里按字节判断 —— 宿主的 list() 为了速度不 stat 文件
@@ -163,12 +181,40 @@ async function readRepo(
     }
   }
 
+  /*
+   * 白板的索引：路径 + boardId + 标题。
+   *
+   * 为什么现在读：`.note` 里的白板引用块**按 boardId 认**，没有这张表就解析不了；
+   * 树里显示"名称"也要标题（文件名和标题可以不一样）。
+   * 读坏了或版本超前不影响它在树里出现 —— 那份文件还在，只是打不开而已。
+   */
+  const boards: BoardEntry[] = []
+  for (const e of keep) {
+    if (e.kind !== 'file' || !isBoardPath(e.path)) continue
+    let title = titleOfBoardPath(e.path)
+    let boardId = ''
+    try {
+      const bytes = await host.read(e.path)
+      if (bytes.length <= MAX_FILE) {
+        const parsed = parseBoardFile(decodeBytes(bytes), title)
+        if (parsed.kind === 'ok') {
+          title = parsed.doc.title
+          boardId = parsed.doc.boardId
+        }
+      }
+    } catch {
+      // 读不出来就当作"没有 boardId 的白板"：树里还在，点开时编辑器会说原因
+    }
+    boards.push({ path: e.path, boardId, title })
+  }
+
   return {
     files,
     dirs: keep.filter((e) => e.kind === 'dir').map((e) => e.path),
     hasMark: entries.some((e) => e.path === VAULT_MARK),
     notes: noteRoots,
     assets,
+    boards,
   }
 }
 
@@ -274,6 +320,24 @@ export function App() {
   const [noteDocs, setNoteDocs] = useState<string[]>([])
   /** 图片 / PDF 的路径。只存路径 —— 字节在真正打开时才按需读 */
   const [assets, setAssets] = useState<string[]>([])
+  /**
+   * 白板索引（路径 + boardId + 标题）。
+   *
+   * `.board` 和图片/PDF 一样**不进 files 表**：它是编辑器自己的数据，
+   * 走的是"编辑器直接读写这一个文件"那条路。这张表只为了两件事：
+   * 树里显示标题、以及把 `.note` 的引用块按 boardId 解析成路径。
+   */
+  const [boards, setBoards] = useState<BoardEntry[]>([])
+  /** boardId → 当前路径。改名/搬家后仍然写对地方（未落的保存也写到新位置） */
+  const boardPaths = useRef(new Map<string, string>())
+  /**
+   * 刚改过名、还开着的那块白板：新路径 → 新标题。
+   *
+   * 白板开着的时候不能由这里直接改文件里的 title —— 编辑器那边可能还有
+   * 没落盘的改动，谁后写谁赢。所以只留一条提示，等编辑器重新挂载读盘后
+   * 自己把标题改过来（见 DocPane 的 renameHint）。
+   */
+  const boardRenameHint = useRef(new Map<string, string>())
   /** 分栏：每栏有自己的标签与当前文档，最多 3 栏 */
 
   const [panes, setPanes] = useState<PaneState[]>(() => [{ id: 1, tabs: [], active: null }])
@@ -415,6 +479,7 @@ export function App() {
           ...Object.keys(files).map((f) => ({ path: f, kind: 'file' as const })),
           ...noteDocs.map((n) => ({ path: n, kind: 'file' as const })),
           ...assets.map((a) => ({ path: a, kind: 'file' as const })),
+          ...boards.map((b) => ({ path: b.path, kind: 'file' as const })),
         ],
         // 置顶的按加入顺序排在最前，其余给个大数
         (p) => {
@@ -422,7 +487,7 @@ export function App() {
           return i < 0 ? 1e9 : i
         },
       ),
-    [dirs, files, pins, noteDocs, assets],
+    [dirs, files, pins, noteDocs, assets, boards],
   )
 
   const adopt = useCallback(async (host: Host, ref: RepoRef) => {
@@ -438,6 +503,10 @@ export function App() {
       setDirs(loaded.dirs)
       setNoteDocs(loaded.notes)
       setAssets(loaded.assets)
+      setBoards(loaded.boards)
+      boardPaths.current = new Map(
+        loaded.boards.filter((b) => b.boardId).map((b) => [b.boardId, b.path] as const),
+      )
       setExpanded(
         new Set(
           allDirs(
@@ -951,7 +1020,12 @@ export function App() {
     setFiles((prev) => ({ ...prev, [path]: text }))
   }
 
-  const taken = (p: string) => p in files || dirs.includes(p) || assets.includes(p) || noteDocs.includes(p)
+  const taken = (p: string) =>
+    p in files ||
+    dirs.includes(p) ||
+    assets.includes(p) ||
+    noteDocs.includes(p) ||
+    boards.some((b) => b.path === p)
 
   function createNote(dir: string): string | null {
     const path = uniquePath(notePath(dir, '未命名'), taken)
@@ -1000,7 +1074,129 @@ export function App() {
     return path
   }
 
-  /** 设 / 清某个文件夹的图标。存的是字符，不是图片路径 */
+  /**
+   * 新建一块 `.board`。
+   *
+   * 和 `.note` 一样：**先真的写盘，再打开** —— 反过来的话编辑器会去读一个还不存在
+   * 的文件，界面直接变成"这不是一块能编辑的白板"。
+   * 写失败就什么都不留（树里也不会多出一条）。
+   */
+  /**
+   * 新建一块 `.board`。
+   *
+   * `open` 默认 true（从文件树新建就直接打开）；从 `.note` 的引用块里新建时传 false ——
+   * 用户本来在写笔记，不该被拽到一块空白板上去。
+   */
+  function createBoard(dir: string, open = true): { path: string; boardId: string } | null {
+    if (phase.t !== 'ready') return null
+    const host = phase.host
+    const path = uniquePath(`${dir ? `${dir}/` : ''}未命名.board`, taken)
+    const doc = newBoardFile(titleOfBoardPath(path))
+    const text = serializeBoardFile(doc)
+
+    /*
+     * 先乐观地进索引，再落盘：`.note` 里"新建白板并引用"要立刻拿到 boardId
+     * 才能插引用块；写失败就把这条索引撤掉，树里不会留下一个打不开的白板。
+     */
+    boardPaths.current.set(doc.boardId, path)
+    setBoards((prev) => [...prev, { path, boardId: doc.boardId, title: doc.title }])
+    if (dir) setExpanded((prev) => new Set(prev).add(dir))
+
+    void (async () => {
+      try {
+        await host.write(path, encodeText(text))
+        if (open) openNote(path)
+      } catch (e) {
+        console.warn('[dusk] 新建白板失败', e)
+        boardPaths.current.delete(doc.boardId)
+        setBoards((prev) => prev.filter((b) => b.boardId !== doc.boardId))
+        say('error', `新建白板失败：${String(e)}`)
+      }
+    })()
+
+    return { path, boardId: doc.boardId }
+  }
+
+  /**
+   * 白板保存：**按 boardId 找当前路径**。
+   *
+   * 为什么不是编辑器记着的那个路径：白板被改名/搬家时，编辑器里可能还有
+   * 没落盘的改动。按 id 找，这些改动会写到新位置；按旧路径写会凭空
+   * 再造一个旧文件出来（那是最坏的一种"数据错位"）。
+   */
+  async function saveBoard(boardId: string, text: string) {
+    if (phase.t !== 'ready') throw new Error('仓库还没准备好')
+    const path = boardPaths.current.get(boardId)
+    if (!path) throw new Error('这块白板已经不在仓库里了（可能刚被删除或移动）')
+    await phase.host.write(path, encodeText(text))
+
+    /*
+     * 白板里的标题改了，树/引用块上显示的名字也得跟着改 ——
+     * 索引就在内存里，顺手更新，免得下次读仓库之前一直显示旧标题。
+     */
+    const parsed = parseBoardFile(text, titleOfBoardPath(path))
+    if (parsed.kind === 'ok') {
+      const nextTitle = parsed.doc.title
+      setBoards((prev) => {
+        const hit = prev.find((b) => b.boardId === boardId)
+        if (!hit || (hit.title === nextTitle && hit.path === path)) return prev
+        return prev.map((b) => (b.boardId === boardId ? { ...b, title: nextTitle, path } : b))
+      })
+    }
+  }
+
+  /** 白板改名/搬家后，把界面上所有指向它的地方一起换掉 */
+  function remapBoard(from: string, to: string, nextTitle?: string) {
+    const entry = boards.find((b) => b.path === from)
+    if (entry?.boardId) boardPaths.current.set(entry.boardId, to)
+
+    setBoards((prev) =>
+      prev.map((b) => (b.path === from ? { ...b, path: to, title: nextTitle ?? b.title } : b)),
+    )
+    setPanes((prev) =>
+      prev.map((pane) => ({
+        ...pane,
+        tabs: pane.tabs.map((p) => (p === from ? to : p)),
+        active: pane.active === from ? to : pane.active,
+      })),
+    )
+
+    const meta = parseVault(vaultRaw.current)
+    const nextPins = pins.map((p) => (p === from ? to : p))
+    let filesMeta = meta.files
+    if (meta.files[from]) {
+      const copy: Record<string, FileMeta> = {}
+      for (const [p, v] of Object.entries(meta.files)) copy[p === from ? to : p] = v
+      filesMeta = copy
+    }
+    setPins(nextPins)
+    setIcons(iconsOf({ ...meta, files: filesMeta }))
+    if (nextPins.some((p, i) => p !== pins[i]) || filesMeta !== meta.files) {
+      void writeVaultMeta({ pins: nextPins, files: filesMeta })
+    }
+  }
+
+  /**
+   * 把白板文件搬到新路径。
+   * 宿主有原子换名就用它；浏览器那条路退化成"读出来写新的、删旧的"。
+   */
+  async function moveBoardFile(from: string, to: string): Promise<boolean> {
+    if (phase.t !== 'ready') return false
+    try {
+      if (phase.host.move) {
+        await phase.host.move(from, to)
+      } else {
+        await phase.host.write(to, await phase.host.read(from))
+        await phase.host.remove(from)
+      }
+      return true
+    } catch (e) {
+      console.warn('[dusk] 白板搬家失败', from, '→', to, e)
+      say('error', `这块白板搬不过去：${String(e)}`)
+      return false
+    }
+  }
+
   /** `[[` 提示要的清单：每篇带自己的小节，插出去是 `[[路径#小节]]` */
   const linkTargets = useMemo(
     () =>
@@ -1071,9 +1267,71 @@ export function App() {
     if (noteDocs.includes(path) || path.toLowerCase().endsWith('.note')) {
       return renameNoteDoc(path, name)
     }
+    // `.board` 是单个文件，但内容得由它自己的编辑器维护 —— 只搬文件，不碰内容
+    if (isBoardPath(path)) return renameBoard(path, name)
     const r = renameEntry(files, dirs, path, name)
     if (!r.ok) return r.error
     apply(r)
+    return null
+  }
+
+  /**
+   * 改一块白板的名字。
+   *
+   * 顺序：先搬文件，成功了再换界面上的路径。搬失败什么都不改（磁盘上还是旧名字，
+   * 树里也还是旧名字）—— 不能出现"界面改了、文件没搬"的错位。
+   *
+   * 标题怎么跟：白板开着的时候由编辑器自己改（它保存时会把新标题写回去，
+   * 索引也跟着更新）；没开着就顺手改文件里的 title，否则下次打开还是旧标题。
+   */
+  function renameBoard(path: string, rawName: string): string | null {
+    if (phase.t !== 'ready') return '仓库还没准备好'
+    const clean = sanitizeName(rawName).replace(/\.board$/i, '')
+    if (!clean) return '名字不能为空'
+
+    const parent = parentOf(path)
+    const to = `${parent ? `${parent}/` : ''}${clean}.board`
+    if (to === path) return null
+    if (taken(to)) return `「${clean}」已经存在了`
+
+    const open = panes.some((pane) => pane.tabs.includes(path))
+    const host = phase.host
+
+    void (async () => {
+      if (!(await moveBoardFile(path, to))) return
+
+      if (!open) {
+        try {
+          const parsed = parseBoardFile(decodeBytes(await host.read(to)), clean)
+          if (parsed.kind === 'ok' && parsed.doc.title !== clean) {
+            await host.write(to, encodeText(serializeBoardFile({ ...parsed.doc, title: clean })))
+          }
+        } catch {
+          /* 标题改不了不影响文件本身 */
+        }
+      } else {
+        // 开着的这块：让编辑器自己把标题改过来（它重新挂载后读盘再写）
+        boardRenameHint.current.set(to, clean)
+      }
+      remapBoard(path, to, open ? undefined : clean)
+    })()
+
+    return null
+  }
+
+  /** 把一块白板拖进另一个目录（名字不变） */
+  function moveBoardToDir(path: string, destDir: string): string | null {
+    const from = parentOf(path)
+    if (destDir === from) return null
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    const to = destDir ? `${destDir}/${name}` : name
+    if (taken(to)) return `目标位置已经有「${name}」了`
+
+    void (async () => {
+      if (!(await moveBoardFile(path, to))) return
+      if (destDir) setExpanded((prev) => new Set(prev).add(destDir))
+      remapBoard(path, to)
+    })()
     return null
   }
 
@@ -1134,6 +1392,7 @@ export function App() {
 
   // 改名之后，编辑器里那篇要跟着换路径 —— 这里靠 apply 里的 moved 映射处理
   function doMove(path: string, destDir: string): string | null {
+    if (isBoardPath(path)) return moveBoardToDir(path, destDir)
     const r = moveEntry(files, dirs, path, destDir)
     if (!r.ok) return r.error
     apply(r)
@@ -1141,6 +1400,11 @@ export function App() {
   }
 
   function doDelete(path: string) {
+    // 白板：先查有没有 .note 在引用它，再让用户确认（删除是不可逆的）
+    if (isBoardPath(path)) {
+      void requestDeleteBoard(path)
+      return
+    }
     // 图片 / PDF 不在 files 里：直接让宿主删掉，再把它从树、标签、账本里清掉
     if (assets.includes(path)) {
       if (phase.t === 'ready') {
@@ -1192,7 +1456,141 @@ export function App() {
     }
   }
 
+  /* ───────────────────────── 白板：删除前查引用 ───────────────────────── */
+
+  /**
+   * 删白板之前先把影响面摸清楚：
+   *   · 有几个 `.note` 的引用块指着它（按 boardId 认）
+   *   · 里面有几个"复制进白板"的附件（可以勾选一起删）
+   *
+   * 扫描是异步的，所以对话框先以"检查中"出现 —— 不能等扫完再弹，
+   * 那样点删除之后要愣几秒，看起来像没反应。
+   */
+  async function requestDeleteBoard(path: string) {
+    if (phase.t !== 'ready') return
+    const host = phase.host
+    const entry = boards.find((b) => b.path === path)
+    const title = entry?.title ?? titleOfBoardPath(path)
+
+    let assets = 0
+    try {
+      const parsed = parseBoardFile(decodeBytes(await host.read(path)), title)
+      if (parsed.kind === 'ok') assets = copiedAssets(parsed.doc).length
+    } catch {
+      /* 读不出来就当没有附件；删除本身仍然可做 */
+    }
+    const base: BoardDeleteAsk = {
+      path,
+      boardId: entry?.boardId ?? '',
+      title,
+      state: 'checking',
+      refs: [],
+      assets,
+    }
+    setBoardDelete(base)
+
+    if (!entry?.boardId) {
+      setBoardDelete({
+        ...base,
+        state: 'error',
+        error: '这块白板没有可用的 boardId（可能是更新版本创建的），没法确认哪些笔记引用了它。',
+      })
+      return
+    }
+
+    try {
+      // 列一次目录就够：每篇笔记的文件清单从这里筛
+      const entries = await host.list()
+      const load = async (dir: string) => {
+        const out: Record<string, string> = {}
+        for (const e of entries) {
+          if (e.kind !== 'file' || !e.path.startsWith(`${dir}/`)) continue
+          // assets/ 是二进制，白板引用块不会在里面
+          if (e.path.startsWith(`${dir}/${BOARD_ASSETS}/`)) continue
+          out[e.path] = decodeBytes(await host.read(e.path))
+        }
+        return out
+      }
+      const scan = await scanBoardRefs(noteDocs, load)
+      const refs = refsOfBoard(scan.hits, entry.boardId).map((h) => ({
+        noteDir: h.noteDir,
+        noteTitle: h.noteTitle,
+      }))
+      setBoardDelete((prev) =>
+        prev && prev.path === path
+          ? {
+              ...prev,
+              state: scan.failed.length > 0 ? 'error' : 'ready',
+              refs,
+              error:
+                scan.failed.length > 0
+                  ? `有 ${scan.failed.length} 篇笔记读不出来，可能还有引用没被发现：${scan.failed
+                      .map((f) => f.dir)
+                      .join('、')}`
+                  : undefined,
+            }
+          : prev,
+      )
+    } catch (e) {
+      setBoardDelete((prev) =>
+        prev && prev.path === path
+          ? { ...prev, state: 'error', error: `检查引用时出错：${String(e)}` }
+          : prev,
+      )
+    }
+  }
+
+  async function confirmDeleteBoard(removeAssets: boolean) {
+    const job = boardDelete
+    if (!job || phase.t !== 'ready') return
+    setBoardDelete(null)
+    const host = phase.host
+
+    try {
+      // 先删附件目录（用户明确勾了才删），再删白板本身
+      if (removeAssets && job.boardId) {
+        await host.remove(copyDirOf(job.boardId)).catch((e) => {
+          console.warn('[dusk] 附件目录没删掉', e)
+        })
+      }
+      await host.remove(job.path)
+    } catch (e) {
+      say('error', `删不掉这块白板：${String(e)}`)
+      return
+    }
+
+    if (job.boardId) boardPaths.current.delete(job.boardId)
+    setBoards((prev) => prev.filter((b) => b.path !== job.path))
+    setPanes((prev) =>
+      prev.map((pane) => {
+        const tabs = pane.tabs.filter((t) => t !== job.path)
+        return {
+          ...pane,
+          tabs,
+          active: pane.active === job.path ? (tabs[0] ?? null) : pane.active,
+        }
+      }),
+    )
+    const nextMeta = pruneMeta(parseVault(vaultRaw.current), [job.path])
+    setPins(nextMeta.pins)
+    setIcons(iconsOf(nextMeta))
+    void writeVaultMeta({ pins: nextMeta.pins, files: nextMeta.files })
+    say('ok', '白板已删除；被它引用（没有复制）的仓库文件都没动')
+  }
+
   /* ───────────────────────── 书架：目录、迁移、书签 ───────────────────────── */
+
+  /** 删白板前要问的三件事：谁引用了它、复制进来的附件有几个、失败在哪一步 */
+  type BoardDeleteAsk = {
+    path: string
+    boardId: string
+    title: string
+    state: 'checking' | 'ready' | 'error'
+    refs: { noteDir: string; noteTitle: string }[]
+    assets: number
+    error?: string
+  }
+  const [boardDelete, setBoardDelete] = useState<BoardDeleteAsk | null>(null)
 
   const [toast, setToast] = useState<{ kind: 'ok' | 'warn' | 'error'; text: string } | null>(null)
   const say = useCallback((kind: 'ok' | 'warn' | 'error', text: string) => {
@@ -1425,8 +1823,32 @@ export function App() {
    * 桌面端原生拖入（Tauri v2 `onDragDropEvent`）。
    * 位置是**物理像素**，先除以 devicePixelRatio 再做命中测试。
    */
-  const dropHandler = useRef<(paths: string[], zone: string, dir: string | null) => void>(() => {})
-  dropHandler.current = (paths: string[], zone: string, dir: string | null) => {
+  /**
+   * 桌面端原生拖入的落点登记：路径 → "往这块白板里放"。
+   * 一个界面可能同时开着好几块白板，所以按路径认，不能只按 zone。
+   */
+  const boardDrop = useRef(new Map<string, (paths: string[]) => void>())
+  const registerBoardDrop = useCallback(
+    (path: string, fn: ((paths: string[]) => void) | null) => {
+      if (fn) boardDrop.current.set(path, fn)
+      else boardDrop.current.delete(path)
+    },
+    [],
+  )
+
+  /** 白板里「引用仓库文件」能选的东西：笔记、白板、图片/PDF */
+  const repoFiles = useMemo(
+    () =>
+      [
+        ...Object.keys(files).map((p) => ({ path: p, label: titleOf(files, p) })),
+        ...boards.map((b) => ({ path: b.path, label: b.title })),
+        ...assets.map((p) => ({ path: p, label: nameOf(p) })),
+      ].sort((a, b) => a.path.localeCompare(b.path, 'zh')),
+    [files, boards, assets],
+  )
+
+  const dropHandler = useRef<(paths: string[], zone: string, dir: string | null, path: string | null) => void>(() => {})
+  dropHandler.current = (paths: string[], zone: string, dir: string | null, path: string | null) => {
     void (async () => {
       if (zone === 'shelf-list' || zone === 'shelf-welcome' || zone === 'reader') {
         const looksEpub = paths.filter((p) => /\.epub$/i.test(p))
@@ -1452,6 +1874,16 @@ export function App() {
           const first = results.find((r) => r.ok && r.bookId && !r.duplicate)
           if (first?.bookId) openShelfBook(first.bookId)
         }
+        return
+      }
+
+      if (zone === 'board') {
+        const fn = path ? boardDrop.current.get(path) : undefined
+        if (!fn) {
+          say('warn', '这块白板还没准备好接收文件，稍等一秒再拖')
+          return
+        }
+        fn(paths)
         return
       }
 
@@ -1525,7 +1957,7 @@ export function App() {
           }
           if (p.type === 'drop') {
             setHighlight(null)
-            dropHandler.current(p.paths ?? [], t?.zone ?? 'none', t?.dir ?? null)
+            dropHandler.current(p.paths ?? [], t?.zone ?? 'none', t?.dir ?? null, t?.path ?? null)
           }
         })
         if (disposed) un?.()
@@ -1621,6 +2053,7 @@ export function App() {
             onOpenSplit={openInSplit}
             onNewNote={createNote}
             onNewNoteDoc={createNoteDoc}
+            onNewBoard={(dir) => createBoard(dir)?.path ?? null}
             onNewFolder={createFolder}
             onRename={doRename}
             canReveal={phase.host.capabilities.reveal}
@@ -1629,6 +2062,8 @@ export function App() {
             onDropFiles={(list, dir) => void dropRepoFiles(list, dir)}
             onMove={doMove}
             onDelete={doDelete}
+            /** 白板的删除确认要查引用，由 App 接管 */
+            handlesDelete={(p) => isBoardPath(p)}
             icons={icons}
             onSetIcon={setDirIcon}
             onPickIcon={setIconTarget}
@@ -1731,6 +2166,16 @@ export function App() {
                   shelfBusy={shelf.importing}
                   reading={reading}
                   onPdfPosition={saveReading}
+                  board={{
+                    onSave: saveBoard,
+                    repoFiles,
+                    onRegisterDrop: registerBoardDrop,
+                    entries: boards,
+                    onOpen: openNote,
+                    onCreate: (dir) => createBoard(dir, false),
+                    renameHint: pane.active ? (boardRenameHint.current.get(pane.active) ?? null) : null,
+                    onRenameHintUsed: (p) => boardRenameHint.current.delete(p),
+                  }}
                   shelfReason={
                     shelf.status === 'setup'
                       ? '先到左侧「书架」选一个书架目录，再回来添加'
@@ -1865,6 +2310,19 @@ export function App() {
             ×
           </button>
         </div>
+      ) : null}
+
+      {boardDelete ? (
+        <BoardDeleteDialog
+          title={boardDelete.title}
+          path={boardDelete.path}
+          state={boardDelete.state}
+          refs={boardDelete.refs}
+          assets={boardDelete.assets}
+          error={boardDelete.error}
+          onCancel={() => setBoardDelete(null)}
+          onConfirm={(removeAssets) => void confirmDeleteBoard(removeAssets)}
+        />
       ) : null}
 
       {shelfMove ? (

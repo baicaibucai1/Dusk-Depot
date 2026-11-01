@@ -6,9 +6,18 @@
  *   ② 高亮要"只有真正接收这种格式的区域才亮"，统一由 zone 决定最不容易漏。
  *
  * 于是浏览器端和桌面端共用这套 zone 名字：
- *   shelf-list / shelf-welcome / reader / tree / tree-blank / editor
+ *   shelf-list / shelf-welcome / reader / tree / tree-blank / editor / board
+ *
+ * `path` 是"这个落点具体属于哪个文件"（目前只有 board 用）——
+ * 同一个界面上可能开着好几块白板，光有 zone 分不出该往哪块里放。
  */
-export type DropTarget = { zone: string; dir: string | null; el: HTMLElement | null }
+export type DropTarget = {
+  zone: string
+  dir: string | null
+  /** 落点属于哪个文件（只有 board 用）；其余落点是 null */
+  path?: string | null
+  el: HTMLElement | null
+}
 
 export function targetAt(x: number, y: number): DropTarget | null {
   if (typeof document === 'undefined') return null
@@ -18,6 +27,7 @@ export function targetAt(x: number, y: number): DropTarget | null {
   return {
     zone: zoneEl.dataset.dropZone ?? '',
     dir: zoneEl.dataset.dropDir ?? null,
+    path: zoneEl.dataset.dropPath ?? null,
     el: zoneEl,
   }
 }

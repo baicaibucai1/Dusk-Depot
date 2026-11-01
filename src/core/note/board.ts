@@ -21,6 +21,7 @@
  * 这一层是纯函数（跑在 node 里），不碰 DOM、不碰 React。
  */
 import type { Path } from '../model/path'
+import type { BoardRefView } from '../board/file'
 import {
   NOTE_APP,
   NOTE_BLOCKS,
@@ -47,6 +48,8 @@ export type BoardBlockType =
   | 'image'
   | 'file'
   | 'divider'
+  /** 白板引用块：指向仓库里的一块 `.board`，只存身份和路径提示，不复制内容 */
+  | 'boardref'
   | 'unknown'
 
 export type BoardBlock = {
@@ -64,6 +67,12 @@ export type BoardBlock = {
   size?: number
   /** 图片 alt */
   alt?: string
+  /** 白板引用块：被引用白板的稳定 id */
+  boardId?: string
+  /** 白板引用块：仓库相对路径（定位提示，白板搬家后可能过期） */
+  path?: string
+  /** 白板引用块：显示方式 */
+  view?: BoardRefView
   /** 认不出的块：原始 JSON，保存时原样写回 */
   raw?: Record<string, unknown>
   /** 已知块里不认识的字段：原样保留 */
@@ -103,7 +112,19 @@ export type BoardDoc = {
   settings: BoardSettings
 }
 
-const KNOWN_FIELDS = new Set(['id', 'type', 'content', 'checked', 'src', 'name', 'size', 'alt'])
+const KNOWN_FIELDS = new Set([
+  'id',
+  'type',
+  'content',
+  'checked',
+  'src',
+  'name',
+  'size',
+  'alt',
+  'boardId',
+  'path',
+  'view',
+])
 
 export const BOARD_MARK_TEXT = `${JSON.stringify(
   { app: NOTE_APP, format: 'board', version: BOARD_VERSION, layoutMode: 'flow' },
@@ -186,7 +207,8 @@ export function parseBoardBlock(id: string, text: string): BoardBlock | null {
     type === 'quote' ||
     type === 'image' ||
     type === 'file' ||
-    type === 'divider'
+    type === 'divider' ||
+    type === 'boardref'
 
   if (!known) return { id, type: 'unknown', raw: { ...obj, id } }
 
@@ -214,6 +236,17 @@ export function parseBoardBlock(id: string, text: string): BoardBlock | null {
     block.src = typeof obj.src === 'string' ? obj.src : ''
     if (typeof obj.name === 'string' && obj.name) block.name = obj.name
     if (typeof obj.size === 'number' && Number.isFinite(obj.size)) block.size = obj.size
+    return block
+  }
+
+  if (type === 'boardref') {
+    // 没有 boardId 就没有身份 —— 降级成 unknown（raw 留着），别变成一张空引用卡片
+    if (typeof obj.boardId !== 'string' || !obj.boardId) {
+      return { id, type: 'unknown', raw: { ...obj, id } }
+    }
+    block.boardId = obj.boardId
+    block.path = typeof obj.path === 'string' ? obj.path : ''
+    block.view = obj.view === 'preview' ? 'preview' : 'compact'
     return block
   }
 
@@ -353,6 +386,11 @@ function serializeBlock(block: BoardBlock): string {
       if (block.name) out.name = block.name
       if (typeof block.size === 'number') out.size = block.size
       break
+    case 'boardref':
+      out.boardId = block.boardId ?? ''
+      if (block.path) out.path = block.path
+      out.view = block.view === 'preview' ? 'preview' : 'compact'
+      break
     case 'divider':
       break
     default:
@@ -423,6 +461,8 @@ export function newBoardBlock(type: BoardBlockType, id: string): BoardBlock {
       return { id, type, src: '', alt: '' }
     case 'file':
       return { id, type, src: '', name: '' }
+    case 'boardref':
+      return { id, type: 'boardref', boardId: '', path: '', view: 'compact' }
     case 'divider':
       return { id, type }
     default:
@@ -489,6 +529,10 @@ export function blockText(block: BoardBlock): string {
   if (block.type === 'image') return block.alt || '图片'
   if (block.type === 'file') return block.name || '文件'
   if (block.type === 'divider') return '分隔线'
+  if (block.type === 'boardref') {
+    const name = (block.path ?? '').split('/').pop() ?? ''
+    return name || block.boardId || '白板'
+  }
   if (block.type === 'todo') return `${block.checked ? '[x]' : '[ ]'} ${inlineText(block.content ?? [])}`
   return inlineText(block.content ?? [])
 }
@@ -507,8 +551,10 @@ export function blockLabel(block: BoardBlock | undefined, id: string): string {
             ? '引用'
             : block.type === 'image'
               ? '图片'
-              : block.type === 'file'
-                ? '文件'
+          : block.type === 'file'
+              ? '文件'
+              : block.type === 'boardref'
+                ? '白板'
                 : block.type === 'divider'
                   ? '分隔线'
                   : block.type === 'unknown'

@@ -362,10 +362,40 @@ export const IconTrash = (p: P) => (
 
 /** markdown：一个圆角框，里面 M + 向下箭头（文件树里代替 .md 后缀） */
 export const IconMarkdown = (p: P) => (
-  <Base {...p}>
+  <Base data-icon="markdown" {...p}>
     <rect x="1.8" y="3.2" width="12.4" height="9.6" rx="2" />
     <path d="M4.3 10.3V6l1.6 2 1.6-2v4.3" />
     <path d="M10.7 6.1v3.9M9.3 8.6l1.4 1.5 1.4-1.5" />
+  </Base>
+)
+
+/**
+ * PDF：一页纸 + 折角 + 一个粗体的 P。
+ *
+ * 为什么不用现成的 `file-type`（一页纸里画个 T）：那个记号在 16px 下读作"字形/文本"，
+ * 和纯文本的 file-text 撞脸 —— PDF 是只读的成品文档，需要一个自己的记号。
+ * 一页纸 + P 是这套图标里唯一"页面里放实心字形"的骨架（markdown 用 M↓），
+ * 扫一眼能和其他文件类型分开；尺寸、描边、留白跟同排图标完全一致。
+ */
+export const IconPdf = (p: P) => (
+  <Base data-icon="pdf" {...p}>
+    <path d="M13 5.6V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h5.4L13 5.6Z" />
+    <path d="M9.4 2v3.1a.5.5 0 0 0 .5.5H13" />
+    <path d="M5.7 11.8V7.2h1.9a1.6 1.6 0 0 1 0 3.2H5.7" />
+  </Base>
+)
+
+/**
+ * 白板：一块画板，里面有一张便签和两行字。
+ *
+ * 不能用"四个小方块"（那是块笔记）或"表格"（那是 grid）——
+ * 白板是**一块面**，所以外框一定要有，内容只是面上的一点点东西。
+ */
+export const IconBoard = (p: P) => (
+  <Base data-icon="board" {...p}>
+    <rect x="1.8" y="3.3" width="12.4" height="9.4" rx="2" />
+    <rect x="4" y="5.6" width="3" height="2.9" rx="0.9" />
+    <path d="M8.7 6.2h2.9M8.7 8.2h2" />
   </Base>
 )
 

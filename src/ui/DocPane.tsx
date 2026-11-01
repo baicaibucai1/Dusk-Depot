@@ -16,15 +16,17 @@ import { ImageViewer } from './viewers/ImageViewer'
 import { PdfViewer } from './viewers/PdfViewer'
 import { FormatBar } from './FormatBar'
 import { emptyTable, buildTable } from '../core/markdown/table'
-/** 块编辑器和 TipTap 一起懒加载 —— 首屏不该为它付钱 */
+/** 块编辑器、白板编辑器和 TipTap 一起懒加载 —— 首屏不该为它付钱 */
 const NoteEditor = lazy(() =>
   import('./NoteEditor').then((m) => ({ default: m.NoteEditor })),
 )
+const BoardEditor = lazy(() => import('./board/BoardEditor').then((m) => ({ default: m.BoardEditor })))
 import { TableEditor } from './TableEditor'
 import { BlockView, JumpContext, TaskContext, type JumpKind } from './markdown/render'
 import { LinkDialog } from './LinkDialog'
 import { MathDialog } from './MathDialog'
 import { EpubNotice } from './EpubNotice'
+import { FileGlyph } from './fileIcon'
 import type { EditorContext } from './editor/CodeEditor'
 import type { EditorHandle } from './editor/CodeEditor'
 import { IconBook, IconCode, IconPanelRight, IconPen, IconSplit } from './icons'
@@ -87,6 +89,24 @@ type Props = {
   reading?: Record<string, import('../core/model/vault').ReadingSpot>
   /** PDF 位置变了，交给外层写回 .zzq */
   onPdfPosition?: (path: string, spot: import('../core/model/vault').ReadingSpot) => void
+  /**
+   * 白板：保存 + 可引用的仓库文件清单 + 桌面端原生拖入的登记口。
+   * 没有这个（比如书架那一侧）就不渲染白板编辑器。
+   */
+  board?: {
+    onSave: (boardId: string, text: string) => Promise<void>
+    repoFiles: { path: string; label: string }[]
+    onRegisterDrop: (path: string, fn: ((paths: string[]) => void) | null) => void
+    /** 白板索引 —— `.note` 的白板引用块按 boardId 在这里查 */
+    entries: import('../core/board/refs').BoardEntry[]
+    /** 打开一块白板（引用块点"打开"） */
+    onOpen: (path: string) => void
+    /** 新建一块白板（引用块里的"新建并引用"） */
+    onCreate: (dir: string) => { path: string; boardId: string } | null
+    /** 这块白板刚被改名：编辑器读盘后把标题跟着改成它 */
+    renameHint?: string | null
+    onRenameHintUsed?: (path: string) => void
+  } | null
 }
 
 /* 三档，照 Obsidian 那套：阅读（不可编辑）／编写（实时预览）／原代码（不渲染） */
@@ -125,6 +145,7 @@ export function DocPane({
   shelfReason,
   reading,
   onPdfPosition,
+  board,
 }: Props) {
   // 允许用 ?mode=read|preview|source 直接开在某一档 —— 分享链接和截图验证都用得上
   const [mode, setMode] = useState<Mode>(() => {
@@ -257,7 +278,9 @@ export function DocPane({
   const preview = active ? previewOf(active) : null
   /** EPUB 也一样：文件区不读它，给一条去书架的说明 */
   const epubDoc = active ? kindOf(active) === 'epub' : false
-  const readOnlyDoc = Boolean(preview) || epubDoc
+  /** 白板：中间区域交给白板编辑器，不走 markdown 那条路 */
+  const boardDoc = Boolean(active && board && kindOf(active) === 'board')
+  const readOnlyDoc = Boolean(preview) || epubDoc || boardDoc
 
   /** 光标上下文：在不在表格里、当前是几级标题 */
   const [ctx, setCtx] = useState<EditorContext>({ inTable: false, heading: null })
@@ -314,9 +337,15 @@ export function DocPane({
                     type="button"
                     onClick={() => onSelectTab(p)}
                     title={p}
-                    className="max-w-[11rem] truncate"
+                    className="flex min-w-0 max-w-[11rem] items-center gap-1.5"
                   >
-                    {labelOf(p)}
+                    {/* 标签页也要能一眼分清是笔记、PDF 还是白板 —— 和文件树同一套图标 */}
+                    <FileGlyph
+                      path={p}
+                      size={13}
+                      className={`shrink-0 ${on ? 'text-green' : 'text-ink-3'}`}
+                    />
+                    <span className="truncate">{labelOf(p)}</span>
                   </button>
                   <button
                     type="button"
@@ -408,7 +437,16 @@ export function DocPane({
 
       {noteDir ? (
         <Suspense fallback={null}>
-          <NoteEditor host={host} dir={noteDir} onInfo={onNoteInfo} onJump={onJump} notes={notes} />
+          <NoteEditor
+            host={host}
+            dir={noteDir}
+            onInfo={onNoteInfo}
+            onJump={onJump}
+            notes={notes}
+            boards={board?.entries}
+            onOpenBoard={board?.onOpen}
+            onCreateBoard={board?.onCreate}
+          />
         </Suspense>
       ) : null}
 
@@ -447,6 +485,29 @@ export function DocPane({
       >
         {active && preview === 'image' ? (
           <ImageViewer host={host} path={active} />
+        ) : active && boardDoc && board ? (
+          <div className="min-h-0 flex-1" data-drop-zone="board" data-drop-path={active}>
+            <Suspense
+              fallback={
+                <div className="grid h-full place-items-center text-[12.5px] text-ink-3">
+                  正在打开白板…
+                </div>
+              }
+            >
+              <BoardEditor
+                key={active}
+                host={host}
+                path={active}
+                onSave={board.onSave}
+                repoFiles={board.repoFiles}
+                onRegisterDrop={board.onRegisterDrop}
+                renameHint={board.renameHint}
+                onRenameHintUsed={board.onRenameHintUsed}
+                onOpenFile={(p) => onJump(p, 'path')}
+                onNotice={onNotice}
+              />
+            </Suspense>
+          </div>
         ) : active && preview === 'pdf' ? (
           <PdfViewer
             key={active}

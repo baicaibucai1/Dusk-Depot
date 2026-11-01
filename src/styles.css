@@ -1577,3 +1577,22 @@ html[data-dd-drop='tree-blank'] [data-drop-zone='tree-blank'] {
 .dd-legacy-readonly .dd-flow-image-empty {
   pointer-events: none;
 }
+
+/*
+ * 键盘焦点：统一成一道绿环。
+ *
+ * 为什么不在每个按钮上各写 focus-visible：漏一个就回到浏览器默认的蓝环，
+ * 在浅纸面 + 绿色强调色里很跳。这里一处定义，按钮/输入/菜单项都一致。
+ * 只影响 `:focus-visible`（键盘 Tab 才有），鼠标点击不会多出一圈。
+ */
+:where(button, [role='menuitem'], a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-green) 60%, transparent);
+  outline-offset: 1px;
+}
+
+/* 块里的编辑器自己会画光标，别再套一层外框 */
+.dd-board-input:focus-visible,
+.ProseMirror:focus-visible,
+.cm-editor:focus-visible {
+  outline: none;
+}

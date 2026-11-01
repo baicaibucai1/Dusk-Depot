@@ -6,11 +6,13 @@
  */
 import type { Editor } from '@tiptap/core'
 import { FileText, GripVertical, Image as ImageIcon, Link2, MoreHorizontal, RotateCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { BoardBlock } from '../../core/note/board'
 import type { Inline } from '../../core/note/flow'
+import type { BoardEntry } from '../../core/board/refs'
 import type { Host } from '../../core/ports/host'
-import { putImage, resolveImage } from '../markdown/imageStore'
+import { useAssetUrl } from '../assetUrl'
+import { BoardRefBlock } from './BoardRefBlock'
 import { BoardTextEditor } from './BoardTextEditor'
 
 type Props = {
@@ -33,6 +35,10 @@ type Props = {
   onShowRelations: (id: string) => void
   onMove: (id: string, dir: -1 | 1) => void
   onNotice: (text: string) => void
+  /** 白板引用块：仓库里的白板索引 + 打开 / 重新定位 */
+  boards?: BoardEntry[]
+  onOpenBoard?: (path: string) => void
+  onRelocateBoard?: (blockId: string) => void
 }
 
 export function BoardCard({
@@ -55,6 +61,9 @@ export function BoardCard({
   onShowRelations,
   onMove,
   onNotice,
+  boards = [],
+  onOpenBoard,
+  onRelocateBoard,
 }: Props) {
   const isText =
     block.type === 'paragraph' ||
@@ -182,6 +191,14 @@ export function BoardCard({
           <ImageBlock host={host} block={block} onPick={() => onPickAsset(block.id, 'image')} />
         ) : block.type === 'file' ? (
           <FileBlock host={host} block={block} onPick={() => onPickAsset(block.id, 'file')} onNotice={onNotice} />
+        ) : block.type === 'boardref' ? (
+          <BoardRefBlock
+            host={host}
+            block={block}
+            boards={boards}
+            onOpen={(p) => onOpenBoard?.(p)}
+            onRelocate={(id) => onRelocateBoard?.(id)}
+          />
         ) : (
           <UnknownBlock block={block} />
         )}
@@ -289,48 +306,6 @@ function FileBlock({
       ) : null}
     </div>
   )
-}
-
-function useAssetUrl(host: Host, src: string | undefined): { url: string | null; state: 'loading' | 'ok' | 'missing' } {
-  const [url, setUrl] = useState<string | null>(() => (src ? resolveImage(src) : null))
-  const [state, setState] = useState<'loading' | 'ok' | 'missing'>(() => {
-    if (!src) return 'missing'
-    return resolveImage(src) ? 'ok' : 'loading'
-  })
-
-  useEffect(() => {
-    let alive = true
-    if (!src) {
-      setUrl(null)
-      setState('missing')
-      return
-    }
-    const cached = resolveImage(src)
-    if (cached) {
-      setUrl(cached)
-      setState('ok')
-      return
-    }
-    setState('loading')
-    void (async () => {
-      try {
-        const bytes = await host.read(src)
-        const next = URL.createObjectURL(new Blob([bytes as unknown as BlobPart]))
-        putImage(src, next)
-        if (alive) {
-          setUrl(next)
-          setState('ok')
-        }
-      } catch {
-        if (alive) setState('missing')
-      }
-    })()
-    return () => {
-      alive = false
-    }
-  }, [host, src])
-
-  return { url, state }
 }
 
 function formatSize(n: number): string {
