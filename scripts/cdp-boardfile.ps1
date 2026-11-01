@@ -277,6 +277,20 @@ $panel = Num 'document.querySelectorAll("[data-dd-board-link-row]").length'
 Check '连接面板列出两条' ($panel -eq 2) "n=$panel"
 Shot 'board-links-1440'
 
+Write-Host 'G2. 关掉重开：块、顺序、连接都还在'
+$orderBefore = Eval '[...document.querySelectorAll("[data-dd-board-block]")].map((e) => e.dataset.ddBoardBlock).join(",")'
+[void](Eval '(() => { const b = [...document.querySelectorAll("button[aria-label]")].find((x) => (x.getAttribute("aria-label") || "").startsWith("关闭 项目.board")); if (!b) return false; b.click(); return true })()')
+Start-Sleep -Milliseconds 700
+Check '白板标签关掉了' ((Num 'document.querySelectorAll("[data-dd-board-scroll]").length') -eq 0) ''
+[void](ClickText '项目.board')
+Start-Sleep -Milliseconds 1500
+$orderAfter = Eval '[...document.querySelectorAll("[data-dd-board-block]")].map((e) => e.dataset.ddBoardBlock).join(",")'
+Check '重开后块的顺序一模一样' ($orderAfter -eq $orderBefore) "before=$orderBefore after=$orderAfter"
+$linesAfter = Num 'document.querySelectorAll("[data-dd-board-links] path").length'
+Check '重开后连接线也回来了' ($linesAfter -eq 2) "n=$linesAfter"
+$textAfter = Eval 'document.querySelector("[data-dd-board-scroll]")?.innerText ?? ""'
+Check '重开后正文就是改过的那份' ([bool]("$textAfter" -match '\（已改\）')) ''
+
 Write-Host 'H. 保存失败：状态必须是失败，重试能成功'
 $boardPath = '白板/项目.board'
 [void](Eval "window.__failWrite = '$boardPath'; 'ok'")
