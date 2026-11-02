@@ -1596,3 +1596,18 @@ html[data-dd-drop='tree-blank'] [data-drop-zone='tree-blank'] {
 .cm-editor:focus-visible {
   outline: none;
 }
+
+/*
+ * 白板卡片的 hover 区往外扩 3px。
+ *
+ * 为什么：连接锚点浮在卡片外面 2px 起的地方，靠 `group-hover` 才可点。
+ * 鼠标从卡片移向锚点时要经过这段"空气"，如果这段不算卡片 hover，
+ * 锚点会在半路消失、点不着 —— 用户看到的就是"点不上"。
+ * 扩 3px 正好和锚点的命中区接上，中间不留缝；3px 太窄，不影响"点空白取消选中"。
+ */
+.dd-board-card::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 16px;
+}

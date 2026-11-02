@@ -133,6 +133,10 @@ export function BoardEditor({
   const [linkFrom, setLinkFrom] = useState<string | null>(null)
   /** 正在编辑的连接 id（改类型 / 说明 / 目标） */
   const [linkEdit, setLinkEdit] = useState<string | null>(null)
+  /** 当前"活"着的那一块：内容能点、能编辑。默认没有 —— 整块只负责拖动 */
+  const [activeId, setActiveId] = useState<string | null>(null)
+  /** 「点谁连谁」的源块 */
+  const [linkPick, setLinkPick] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [selectedLink, setSelectedLink] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
@@ -181,6 +185,8 @@ export function BoardEditor({
     setHideWarnings(false)
     setSelected(null)
     setSelectedLink(null)
+    setActiveId(null)
+    setLinkPick(null)
     past.current = []
     future.current = []
     bumpHistory(0)
@@ -320,6 +326,7 @@ export function BoardEditor({
     editKey.current = { key: '', at: 0 }
     setSelected((s) => (s && prev.blocks[s] ? s : null))
     setSelectedLink(null)
+    setActiveId((s) => (s && prev.blocks[s] ? s : null))
     bumpHistory((n) => n + 1)
     restore(prev)
   }, [restore])
@@ -380,6 +387,7 @@ export function BoardEditor({
     commit(next)
     setSelected(id)
     setSelectedLink(null)
+    setActiveId(id)
     setFocusId(id)
   }
 
@@ -404,6 +412,7 @@ export function BoardEditor({
     commit(removeBlock(d, id))
     setSelected(null)
     setSelectedLink(null)
+    if (activeId === id) setActiveId(null)
     if (
       block &&
       (block.type === 'image' || block.type === 'file') &&
@@ -465,6 +474,8 @@ export function BoardEditor({
     if (e.key === 'Escape') {
       setSelected(null)
       setSelectedLink(null)
+      setLinkPick(null)
+      setActiveId(null)
       return
     }
     if (mod && k === 'd' && selected) {
@@ -548,6 +559,7 @@ export function BoardEditor({
     next = setPos(next, id, { ...spot, w: defaultWidth(kind) })
     commit(next)
     setSelected(id)
+    setActiveId(id)
     setFocusId(id)
   }
 
@@ -739,6 +751,18 @@ export function BoardEditor({
   /* ── 连接：拖出来 / 改 / 反向 / 删 ── */
 
   /**
+   * 双击一块 = 让它"活过来"：内容能点、能编辑、能选中文字。
+   * 没激活的时候整块只是一个可拖的卡片，点哪儿都是拖。
+   */
+  const activate = (id: string | null) => {
+    setActiveId(id)
+    if (!id) return
+    setSelected(id)
+    setSelectedLink(null)
+    setFocusId(id)
+  }
+
+  /**
    * 从锚点拖到另一块松手。
    *
    * 这里只补一条默认的「相关」连接 —— 拖拽的意图是"这两块有关系"，
@@ -771,6 +795,21 @@ export function BoardEditor({
     notify(
       `已连接「${blockLabel(d.blocks[from], from)}」→「${blockLabel(d.blocks[to], to)}」；点这条线可改类型`,
     )
+  }
+
+  /**
+   * 工具条上的「连接到…」：进入"点谁连谁"——一条线跟着鼠标，点中哪块就连哪块。
+   * 点空白 / 按 Esc / 再点一次源块，都算取消。
+   */
+  const pickTarget = (to: string | null, sides?: { from: AnchorSide; to: AnchorSide | null }) => {
+    const from = linkPick
+    setLinkPick(null)
+    if (!from) return
+    if (!to || to === from) {
+      notify('没连上：要点另一张卡片（点空白或按 Esc 取消）')
+      return
+    }
+    createLink(from, to, sides?.from ?? 'right', sides?.to ?? null)
   }
 
   const editLink = (rel: { to: string; type: LinkType; label: string }) => {
@@ -948,17 +987,26 @@ export function BoardEditor({
           selected={selected}
           selectedLink={selectedLink}
           focusId={focusId}
+          active={activeId}
+          linkPick={linkPick}
           onSelect={(id) => {
             setSelected(id)
             if (id) setSelectedLink(null)
           }}
           onSelectLink={setSelectedLink}
+          onActivate={activate}
+          onPickTarget={pickTarget}
           onMove={moveTo}
           onChange={patchBlock}
           onMenu={(id, x, y) => setMenu({ id, x, y })}
           onDuplicate={duplicate}
           onDelete={removeOne}
-          onConnect={(id) => setLinkFrom(id)}
+          onConnect={(id) => {
+            setLinkPick(id)
+            setActiveId(null)
+            setSelectedLink(null)
+            notify('点另一张卡片就连上；点空白或按 Esc 取消')
+          }}
           onCreateLink={createLink}
           onEditLink={(id) => setLinkEdit(id)}
           onReverseLink={flipLink}
@@ -992,8 +1040,9 @@ export function BoardEditor({
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {doc.links.length === 0 ? (
                 <p className="px-2 py-6 text-center text-[11px] leading-relaxed text-ink-3">
-                  还没有连接。把鼠标放到一块上，从卡片边上的小圆点拖到另一块，松手就连上了。
-                  想指定关系类型，就用选中块 → 工具条上的链接按钮，或右键 →「连接到…」。
+                  还没有连接。两种办法：<br />
+                  ① 从卡片边上的小圆点，拖到另一块；<br />
+                  ② 选中一块，点工具条上的链接按钮 —— 线会跟着鼠标走，点哪块就连哪块。
                 </p>
               ) : (
                 <ul className="flex flex-col gap-1">
@@ -1044,7 +1093,7 @@ export function BoardEditor({
               )}
               <p className="mt-2 px-2 text-[10px] leading-relaxed text-ink-3/70">
                 连接只表示块之间的关系，不会移动块。点一条线可以改类型、调转方向或删除；
-                点条目能把它的目标块在画布上居中。
+                <span className="text-ink-3/80">双击线两端的小圆点直接断开</span>。点条目能把目标块居中。
               </p>
             </div>
           </aside>
