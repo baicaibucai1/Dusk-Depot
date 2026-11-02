@@ -99,12 +99,32 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 
 const LINK_LABEL = Object.fromEntries(LINK_TYPES.map((t) => [t.id, t.label])) as Record<string, string>
 
-/** 锚点贴在卡片的四条边中点上（一半在里、一半在外） */
+/**
+ * 连接锚点：**浮在卡片外面**，不进卡片矩形。
+ *
+ * 这是刻意的：卡片内部整块都是"按住拖动"，锚点只要压到边上（哪怕只压 1px），
+ * 拖卡片时就会误拉出一条线来 —— 两个手势抢同一块像素，怎么调都别扭。
+ * 放到外面 6px 的空气里（12px 的圆点占 18~6px），命中区物理上不重叠，
+ * 就不存在"点错了"这回事。
+ */
 const PORT_POS: Record<AnchorSide, string> = {
-  top: 'left-1/2 -top-[5px] -translate-x-1/2',
-  bottom: 'left-1/2 -bottom-[5px] -translate-x-1/2',
-  left: 'top-1/2 -left-[5px] -translate-y-1/2',
-  right: 'top-1/2 -right-[5px] -translate-y-1/2',
+  top: 'left-1/2 -top-[18px] -translate-x-1/2',
+  bottom: 'left-1/2 -bottom-[18px] -translate-x-1/2',
+  left: 'top-1/2 -left-[18px] -translate-y-1/2',
+  right: 'top-1/2 -right-[18px] -translate-y-1/2',
+}
+
+/**
+ * 锚点到卡片边的那 6px 小竖线（/ 小横线）。
+ * 没有它，圆点飘在点阵背景里就像一颗背景点，看不出它属于哪张卡。
+ */
+const PORT_TICK: Record<AnchorSide, string> = {
+  top: "after:absolute after:top-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
+  bottom:
+    "after:absolute after:bottom-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
+  left: "after:absolute after:left-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
+  right:
+    "after:absolute after:right-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
 }
 
 const SIDE_LABEL: Record<AnchorSide, string> = {
@@ -1147,9 +1167,10 @@ function CanvasCard(props: CardProps) {
       </div>
 
       {/*
-        四个连接锚点：四边中点，悬停或选中时出现。
+        四个连接锚点：浮在四边中点外侧 6px 的空中，悬停或选中时出现。
         从这里拖出去就是连线 —— 不用先选中、再点按钮、再在对话框里挑目标。
-        锚点抢不到"拖动卡片"和"拖边缘改宽"：那两个手柄因此挪到了左上角和右下角。
+        位置在卡片**外面**，所以卡片里随便按哪儿都是拖动，不会误拉出一条线；
+        拖动卡片的过程中也把锚点收起，免得手上带着四个点跑。
       */}
       {ANCHOR_SIDES.map((side) => (
         <span
@@ -1162,12 +1183,20 @@ function CanvasCard(props: CardProps) {
           data-dd-no-drag
           onPointerDown={(e) => props.onBeginWire(e, block.id, side)}
           className={[
-            'absolute z-10 size-2.5 cursor-crosshair rounded-full border border-ink-3/55 bg-surface',
-            'shadow-[0_1px_2px_rgba(16,35,28,0.14)]',
+            'absolute z-10 size-3 cursor-crosshair rounded-full border-[1.5px] border-ink-3/70 bg-surface',
+            // 纸色外圈：把圆点从点阵背景里"抠"出来，不然会跟背景点混在一起
+            'ring-2 ring-paper shadow-[0_1px_3px_rgba(16,35,28,0.18)]',
+            // 视觉 10px，手上 18px。别扩到贴住卡片边：那样"点边缘"又变成拉线了
+            "before:absolute before:-inset-1 before:content-['']",
+            PORT_TICK[side],
             'transition-[transform,opacity,background-color,border-color] duration-100',
             'hover:scale-150 hover:border-green hover:bg-green',
             PORT_POS[side],
-            selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+            dragging
+              ? 'pointer-events-none opacity-0'
+              : selected
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100',
           ].join(' ')}
         />
       ))}

@@ -372,6 +372,38 @@ if ($cbox -ne '') {
   Check '锚点和手柄互不重叠（不然会抢鼠标）' $false 'no card'
 }
 
+Write-Host 'F3. 两个手势必须分得开：按住卡片是拖，按住圆点才是连线'
+$edgePt = Eval '(() => { const r = document.querySelector("[data-dd-card=\"n1\"]").getBoundingClientRect(); return [Math.round(r.left + 3), Math.round(r.top + r.height / 2)].join(",") })()'
+$posX0 = [int](Eval "$BOARD.layout.pos.n1.x")
+$posY0 = [int](Eval "$BOARD.layout.pos.n1.y")
+$ep = $edgePt.Split(',')
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$ep[0]; y = [double]$ep[1]; button = 'left'; clickCount = 1; buttons = 1 })
+Start-Sleep -Milliseconds 60
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = [double]$ep[0] + 44; y = [double]$ep[1] + 26; button = 'left'; buttons = 1 })
+Start-Sleep -Milliseconds 260
+Check '按在卡片边上拖，不会冒出连线预览' ((Num 'document.querySelectorAll("[data-dd-board-wire]").length') -eq 0) ''
+$portVisible = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [data-dd-port=\"top\"]"); if (!el) return "-1"; return String(getComputedStyle(el).opacity) })()'
+Check '拖动中锚点确实隐藏了' ([double]$portVisible -lt 0.2) "opacity=$portVisible"
+[void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$ep[0] + 44; y = [double]$ep[1] + 26; button = 'left'; clickCount = 1; buttons = 0 })
+Start-Sleep -Milliseconds 900
+$posX1 = [int](Eval "$BOARD.layout.pos.n1.x")
+$posY1 = [int](Eval "$BOARD.layout.pos.n1.y")
+Check '按在边上确实拖动的是卡片本身' (($posX1 -gt $posX0 + 20) -and ($posY1 -gt $posY0 + 10)) "x=$posX0->$posX1 y=$posY0->$posY1"
+
+Write-Host 'F4. 从圆点拖，卡片一点不动'
+$posX2 = [int](Eval "$BOARD.layout.pos.n1.x")
+$portPt = BoxOf '[data-dd-card="n1"] [data-dd-port="top"]'
+$blankPt = Eval '(() => { const r = document.querySelector("[data-dd-board-canvas]").getBoundingClientRect(); return [Math.round(r.left + 90), Math.round(r.top + 90)].join(",") })()'
+if ($portPt -ne '') {
+  $pp = $portPt.Split(',')
+  $bp = $blankPt.Split(',')
+  DragTo ([double]$pp[0]) ([double]$pp[1]) ([double]$bp[0]) ([double]$bp[1])
+  Start-Sleep -Milliseconds 700
+  $posX3 = [int](Eval "$BOARD.layout.pos.n1.x")
+  Check '拖线不会顺手把卡片挪走' ($posX3 -eq $posX2) "x=$posX2->$posX3"
+} else {
+  Check '拖线不会顺手把卡片挪走' $false 'no port'
+}
 Write-Host 'G0. 直接拖线：从卡片边上的圆点拖到另一块就建连接'
 $linksBefore = [int](Eval "$BOARD.links.length")
 $portCount = Num 'document.querySelectorAll("[data-dd-card] [data-dd-port]").length'
