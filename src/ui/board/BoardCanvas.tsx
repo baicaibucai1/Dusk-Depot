@@ -20,7 +20,7 @@
  *   ③ 在块里打字、点按钮，都不会误触发拖动（只从卡片空白处和边开始拖）。
  */
 import type { Editor } from '@tiptap/core'
-import { Copy, Link2, Minus, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeftRight, Copy, Link2, Minus, Pencil, Plus, Trash2 } from 'lucide-react'
 import {
   forwardRef,
   useCallback,
@@ -31,10 +31,13 @@ import {
   useState,
 } from 'react'
 import {
+  type AnchorSide,
   type BoardBlock,
   type BoardBlockType,
   type BoardFileDoc,
   type Pos,
+  ANCHOR_SIDES,
+  LINK_TYPES,
   defaultWidth,
   layoutOf,
 } from '../../core/board/file'
@@ -78,6 +81,11 @@ type Props = {
   onDuplicate: (id: string) => void
   onDelete: (id: string) => void
   onConnect: (id: string) => void
+  /** 从某个锚点拖到另一块松手：直接建立连接（不用再走对话框） */
+  onCreateLink: (from: string, to: string, fromSide: AnchorSide, toSide: AnchorSide | null) => void
+  onEditLink: (id: string) => void
+  onReverseLink: (id: string) => void
+  onDeleteLink: (id: string) => void
   /** 加一个块到世界坐标（afterId 非空时插在它后面） */
   onAdd: (at: { x: number; y: number }, type: BoardBlockType, afterId: string | null) => void
   onEditor: (id: string, ed: Editor | null) => void
@@ -88,6 +96,23 @@ type Props = {
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+
+const LINK_LABEL = Object.fromEntries(LINK_TYPES.map((t) => [t.id, t.label])) as Record<string, string>
+
+/** 锚点贴在卡片的四条边中点上（一半在里、一半在外） */
+const PORT_POS: Record<AnchorSide, string> = {
+  top: 'left-1/2 -top-[5px] -translate-x-1/2',
+  bottom: 'left-1/2 -bottom-[5px] -translate-x-1/2',
+  left: 'top-1/2 -left-[5px] -translate-y-1/2',
+  right: 'top-1/2 -right-[5px] -translate-y-1/2',
+}
+
+const SIDE_LABEL: Record<AnchorSide, string> = {
+  top: '上边',
+  right: '右边',
+  bottom: '下边',
+  left: '左边',
+}
 
 function viewKey(boardId: string) {
   return `dusk.boardview.v1:${boardId}`
@@ -116,28 +141,100 @@ const rectOf = (pos: Pos | undefined, size: Size | undefined): Rect | null => {
 const overlaps = (a: Rect, b: Rect) =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
-/** 两个框之间画一条贝塞尔：从朝向对方的那条边出发，横向出线 */
-function linkPath(a: Rect, b: Rect): string {
-  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }
-  const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 }
+/** 一个锚点：边上的中点，加上"朝外"的单位法线（曲线从这儿垂直出线） */
+type Port = { x: number; y: number; nx: number; ny: number }
+
+const centerOf = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 })
+
+function portOf(r: Rect, side: AnchorSide): Port {
+  switch (side) {
+    case 'top':
+      return { x: r.x + r.w / 2, y: r.y, nx: 0, ny: -1 }
+    case 'bottom':
+      return { x: r.x + r.w / 2, y: r.y + r.h, nx: 0, ny: 1 }
+    case 'left':
+      return { x: r.x, y: r.y + r.h / 2, nx: -1, ny: 0 }
+    default:
+      return { x: r.x + r.w, y: r.y + r.h / 2, nx: 1, ny: 0 }
+  }
+}
+
+/** 目标卡片上"朝着 from 这一点"的那条边 —— 拖线松手时用它吸附 */
+function sideFacing(r: Rect, from: { x: number; y: number }): AnchorSide {
+  const c = centerOf(r)
+  // 按半宽/半高归一化：宽卡片上左右更容易够得着，否则总会吸到上下边
+  const dx = (from.x - c.x) / (r.w / 2 + 1)
+  const dy = (from.y - c.y) / (r.h / 2 + 1)
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left'
+  return dy >= 0 ? 'bottom' : 'top'
+}
+
+/** 没记锚边时的自动选边：横向距离更大就左右接，否则上下接 */
+function autoSides(a: Rect, b: Rect): [AnchorSide, AnchorSide] {
+  const ac = centerOf(a)
+  const bc = centerOf(b)
   const dx = bc.x - ac.x
   const dy = bc.y - ac.y
-  // 横向距离更大：左右出线；否则上下出线
-  if (Math.abs(dx) >= Math.abs(dy) * 0.8) {
-    const right = dx >= 0
-    const x1 = right ? a.x + a.w : a.x
-    const x2 = right ? b.x : b.x + b.w
-    const c = Math.max(40, Math.abs(x2 - x1) * 0.45)
-    return `M${x1} ${ac.y} C ${x1 + (right ? c : -c)} ${ac.y}, ${x2 + (right ? -c : c)} ${bc.y}, ${x2} ${bc.y}`
-  }
-  const down = dy >= 0
-  const dir = down ? 1 : -1
-  const y1 = down ? a.y + a.h : a.y
-  const y2 = down ? b.y : b.y + b.h
-  const c = Math.max(36, Math.abs(y2 - y1) * 0.42)
-  // 纵向也往一侧鼓一下：两块左右对齐时纯竖直的线看不出是"连接"，像分隔线
-  const bow = (dx >= 0 ? 1 : -1) * Math.min(40, Math.max(16, Math.abs(y2 - y1) * 0.16))
-  return `M${ac.x} ${y1} C ${ac.x + bow} ${y1 + dir * c}, ${bc.x + bow} ${y2 - dir * c}, ${bc.x} ${y2}`
+  if (Math.abs(dx) >= Math.abs(dy) * 0.8) return dx >= 0 ? ['right', 'left'] : ['left', 'right']
+  return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom']
+}
+
+/**
+ * 两个锚点之间画一条三次贝塞尔：两端都沿着所在边的法线出/入。
+ *
+ * `bow` 把两个控制点往同侧推一点，用来给"上下正对着的两块"制造弧度 ——
+ * 不加的话线就是一根直棍，看着像分隔线，不像连接。
+ */
+function curveBetween(a: Port, b: Port, bow = { x: 0, y: 0 }): string {
+  const dist = Math.hypot(b.x - a.x, b.y - a.y)
+  const c = Math.max(28, Math.min(200, dist * 0.45))
+  /*
+   * 控制距离要看法线是不是"背对"对方：
+   * 从卡片右边拖向左上角时，若仍按 0.45 倍距离往外推，线会先向右兜一大圈再折回来
+   * （在窄画布里直接绕出视野，看着像线断了）。背对时缩短到三成，回环就只是个小弯。
+   */
+  const awayFromA = (b.x - a.x) * a.nx + (b.y - a.y) * a.ny < 0
+  const awayFromB = (a.x - b.x) * b.nx + (a.y - b.y) * b.ny < 0
+  const ca = awayFromA ? Math.max(14, c * 0.3) : c
+  const cb = awayFromB ? Math.max(14, c * 0.3) : c
+  return `M${a.x} ${a.y} C ${a.x + a.nx * ca + bow.x} ${a.y + a.ny * ca + bow.y}, ${b.x + b.nx * cb + bow.x} ${b.y + b.ny * cb + bow.y}, ${b.x} ${b.y}`
+}
+
+/** 两块正交对位时往一侧鼓多少（方向跟着两块的相对位置走） */
+function bowFor(a: Port, b: Port): { x: number; y: number } {
+  const dist = Math.hypot(b.x - a.x, b.y - a.y)
+  const amt = Math.min(46, Math.max(14, dist * 0.12))
+  const vertical = Math.abs(a.ny) === 1 && Math.abs(b.ny) === 1
+  const horizontal = Math.abs(a.nx) === 1 && Math.abs(b.nx) === 1
+  if (vertical) return { x: (b.x >= a.x ? 1 : -1) * amt, y: 0 }
+  if (horizontal) return { x: 0, y: (b.y >= a.y ? 1 : -1) * amt }
+  return { x: 0, y: 0 }
+}
+
+/**
+ * 一条连接的路径。
+ *
+ * 记了锚边就照锚边画 —— 用户是从那个圆点拉出来的，线就该一直从那儿出发，而且走直线：
+ * 那是他亲手点的位置，不该被"自动弧度"挪走感觉。
+ * 没记（老数据 / 从菜单建的）就按两块相对位置自动选边，并加一点弧度好认。
+ */
+function linkPath(a: Rect, b: Rect, fromSide?: AnchorSide, toSide?: AnchorSide): string {
+  const auto = autoSides(a, b)
+  const sSide = fromSide ?? auto[0]
+  // 起点边是显式给的，终点就不能再用 autoSides 推（它可能推回起点那侧，线会绕一圈）
+  const tSide = toSide ?? (fromSide ? sideFacing(b, centerOf(a)) : auto[1])
+  const s = portOf(a, sSide)
+  const t = portOf(b, tSide)
+  return curveBetween(s, t, fromSide || toSide ? { x: 0, y: 0 } : bowFor(s, t))
+}
+
+/** 拖线时的终点：光标没有落在卡片上，就朝光标方向收线 */
+function loosePort(at: { x: number; y: number }, from: Port): Port {
+  const dx = at.x - from.x
+  const dy = at.y - from.y
+  return Math.abs(dx) >= Math.abs(dy)
+    ? { x: at.x, y: at.y, nx: dx >= 0 ? -1 : 1, ny: 0 }
+    : { x: at.x, y: at.y, nx: 0, ny: dy >= 0 ? -1 : 1 }
 }
 
 export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(props, ref) {
@@ -145,6 +242,9 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState<Viewport>(() => loadView(doc.boardId) ?? { x: 160, y: 120, z: 1 })
+  /* 拖线的回调是在 window 上跑的，读 state 会读到旧值 —— 用 ref 拿"此刻"的视图 */
+  const viewRef = useRef(view)
+  viewRef.current = view
   const [size, setSize] = useState<Size>({ w: 1200, h: 800 })
   const [sizes, setSizes] = useState<Record<string, Size>>({})
   const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null)
@@ -152,6 +252,14 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   const [panning, setPanning] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
   const [hoverLink, setHoverLink] = useState<string | null>(null)
+  /** 正在从某个锚点拖出的一条线 */
+  const [wire, setWire] = useState<{
+    from: string
+    side: AnchorSide
+    at: { x: number; y: number }
+    over: string | null
+    overSide: AnchorSide | null
+  } | null>(null)
   const fitted = useRef<string | null>(null)
 
   const layout = useMemo(() => layoutOf(doc), [doc])
@@ -174,6 +282,11 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     }
     return out
   }, [doc.layout.order, doc.blocks, posNow, sizes])
+  /* 指针回调里要按当前矩形算吸附点，同样不能读可能过期的闭包 */
+  const rectsRef = useRef<Record<string, Rect>>(rects)
+  rectsRef.current = rects
+  const blocksRef = useRef(doc.blocks)
+  blocksRef.current = doc.blocks
 
   /* ── 视口 ── */
 
@@ -213,14 +326,12 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     })
   }, [rects, size])
 
-  const toWorld = useCallback(
-    (clientX: number, clientY: number) => {
-      const box = viewportRef.current?.getBoundingClientRect()
-      if (!box) return { x: 0, y: 0 }
-      return { x: (clientX - box.left - view.x) / view.z, y: (clientY - box.top - view.y) / view.z }
-    },
-    [view],
-  )
+  const toWorld = useCallback((clientX: number, clientY: number) => {
+    const box = viewportRef.current?.getBoundingClientRect()
+    const v = viewRef.current
+    if (!box) return { x: 0, y: 0 }
+    return { x: (clientX - box.left - v.x) / v.z, y: (clientY - box.top - v.y) / v.z }
+  }, [])
 
   /** 给新块找个不压住别人的位置：从目标点开始往右下蹭 */
   const freeSpot = useCallback(
@@ -432,6 +543,101 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     window.addEventListener('pointerup', up)
   }
 
+  /**
+   * 从卡片边上的圆点拉一条线出去。
+   *
+   * 松手时用 `elementFromPoint` 判"落到了哪张卡"——不是靠卡片自己的 pointerenter：
+   * 拖拽期间 pointer 事件被 window 接管，子元素收不到 enter/leave。
+   */
+  const beginWire = (e: React.PointerEvent, id: string, side: AnchorSide) => {
+    if (e.button !== 0) return
+    const box = rectsRef.current[id]
+    if (!box) return
+    e.preventDefault()
+    e.stopPropagation()
+    props.onSelect(id)
+    props.onSelectLink(null)
+    const start = portOf(box, side)
+    const press = { x: e.clientX, y: e.clientY }
+    setWire({ from: id, side, at: start, over: null, overSide: null })
+    document.body.style.userSelect = 'none'
+
+    /*
+     * 拖到画布边上就自己平移 —— 无限画布上要能连到视野外的那块，
+     * 否则用户得先松手、平移、再重来一遍。
+     */
+    const edge = { x: 0, y: 0 }
+    let lastClient = { x: e.clientX, y: e.clientY }
+    let raf = 0
+    const glide = () => {
+      raf = 0
+      if (!edge.x && !edge.y) return
+      setView((v) => ({ ...v, x: v.x + edge.x * 11, y: v.y + edge.y * 11 }))
+      // 视图动了，光标的世界坐标也跟着动（画面要跟着手）
+      setWire((w) => (w ? { ...w, at: toWorld(lastClient.x, lastClient.y) } : w))
+      raf = requestAnimationFrame(glide)
+    }
+    const trackEdge = (ev: PointerEvent) => {
+      lastClient = { x: ev.clientX, y: ev.clientY }
+      const vp = viewportRef.current?.getBoundingClientRect()
+      if (!vp) return
+      const m = 56
+      edge.x = ev.clientX < vp.left + m ? 1 : ev.clientX > vp.right - m ? -1 : 0
+      edge.y = ev.clientY < vp.top + m ? 1 : ev.clientY > vp.bottom - m ? -1 : 0
+      if (!raf && (edge.x || edge.y)) raf = requestAnimationFrame(glide)
+    }
+
+    const hitAt = (ev: PointerEvent) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const card = el?.closest('[data-dd-card]') as HTMLElement | null
+      const hit = card?.dataset.ddCard ?? null
+      if (!hit || hit === id || !blocksRef.current[hit]) return { over: null, overSide: null }
+      const tr = rectsRef.current[hit]
+      return { over: hit, overSide: tr ? sideFacing(tr, start) : null }
+    }
+
+    const move = (ev: PointerEvent) => {
+      trackEdge(ev)
+      const { over, overSide } = hitAt(ev)
+      setWire({ from: id, side, at: toWorld(ev.clientX, ev.clientY), over, overSide })
+    }
+
+    const stop = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('keydown', onKey)
+      document.body.style.userSelect = ''
+      edge.x = 0
+      edge.y = 0
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+    }
+
+    const up = (ev: PointerEvent) => {
+      stop()
+      const { over, overSide } = hitAt(ev)
+      const moved = Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 6
+      setWire(null)
+      if (over) {
+        props.onCreateLink(id, over, side, overSide)
+        return
+      }
+      if (moved) props.onNotice('没连上：线要拖到另一张卡片上再松手')
+    }
+
+    // 拖到一半反悔：Esc 收线，什么都不建
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return
+      ev.preventDefault()
+      stop()
+      setWire(null)
+    }
+
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('keydown', onKey)
+  }
+
   const reportSize = useCallback((id: string, w: number, h: number) => {
     setSizes((prev) => {
       const cur = prev[id]
@@ -447,6 +653,27 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   const selRect = selected ? rects[selected] : null
   const hoverHot = hoverLink ?? selectedLink
 
+  /* 拖线中的预览：起点是按下那个锚点，终点吸附到目标边或跟着光标 */
+  const wireFrom = wire ? rects[wire.from] : null
+  const wireStart = wire && wireFrom ? portOf(wireFrom, wire.side) : null
+  const wireOver = wire?.over ? rects[wire.over] : null
+  const wireEnd =
+    wire && wireStart
+      ? wire.overSide && wireOver
+        ? portOf(wireOver, wire.overSide)
+        : loosePort(wire.at, wireStart)
+      : null
+  const wireD = wireStart && wireEnd ? curveBetween(wireStart, wireEnd) : ''
+
+  /* 选中一条连接时的小工具条：贴在曲线中点上方（屏幕空间，不跟着缩放变小） */
+  const selLink = selectedLink ? doc.links.find((l) => l.id === selectedLink) : null
+  const linkMidOf = (l: { from: string; to: string }) => {
+    const a = rects[l.from]
+    const b = rects[l.to]
+    return a && b ? midpointOf(a, b) : null
+  }
+  const selLinkMid = selLink ? linkMidOf(selLink) : null
+
   return (
     <div className="relative h-full min-h-0 flex-1 overflow-hidden bg-paper">
       <div
@@ -455,7 +682,15 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
         data-dd-board-canvas
         className={[
           'absolute inset-0 touch-none',
-          spaceDown ? (panning ? 'cursor-grabbing' : 'cursor-grab') : panning ? 'cursor-grabbing' : 'cursor-default',
+          wire
+            ? 'cursor-crosshair'
+            : spaceDown
+              ? panning
+                ? 'cursor-grabbing'
+                : 'cursor-grab'
+              : panning
+                ? 'cursor-grabbing'
+                : 'cursor-default',
         ].join(' ')}
         style={{
           backgroundImage:
@@ -519,7 +754,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
               if (!a || !b) return null
               const hot = hoverHot === l.id
               const on = selectedLink === l.id
-              const d = linkPath(a, b)
+              const d = linkPath(a, b, l.fromSide, l.toSide)
               const mid = midpointOf(a, b)
               return (
                 <g key={l.id} data-dd-board-link={l.id}>
@@ -528,7 +763,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                     d={d}
                     fill="none"
                     stroke="transparent"
-                    strokeWidth={14}
+                    strokeWidth={16}
                     className="pointer-events-auto cursor-pointer"
                     onPointerDown={(e) => {
                       e.stopPropagation()
@@ -545,6 +780,27 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                     strokeWidth={on || hot ? 2 : 1.4}
                     strokeOpacity={on ? 1 : hot ? 0.9 : 0.45}
                     strokeLinecap="round"
+                    // 缩到 25% 时线不该细得看不见；放大到 250% 也不该粗成一条带子
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  {/* 两端的锚点小圆：一眼看出这条线是从哪条边出去的 */}
+                  <circle
+                    cx={portOf(a, l.fromSide ?? autoSides(a, b)[0]).x}
+                    cy={portOf(a, l.fromSide ?? autoSides(a, b)[0]).y}
+                    r={on || hot ? 3.4 : 2.6}
+                    fill={on ? 'var(--color-green)' : 'var(--color-paper)'}
+                    stroke={on ? 'var(--color-green)' : 'var(--color-ink-3)'}
+                    strokeOpacity={on || hot ? 1 : 0.72}
+                    strokeWidth={1.2}
+                  />
+                  <circle
+                    cx={portOf(b, l.toSide ?? autoSides(a, b)[1]).x}
+                    cy={portOf(b, l.toSide ?? autoSides(a, b)[1]).y}
+                    r={on || hot ? 3.4 : 2.6}
+                    fill={on ? 'var(--color-green)' : 'var(--color-paper)'}
+                    stroke={on ? 'var(--color-green)' : 'var(--color-ink-3)'}
+                    strokeOpacity={on || hot ? 1 : 0.72}
+                    strokeWidth={1.2}
                   />
                   {l.label ? (
                     <text
@@ -580,12 +836,14 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                 block={block}
                 pos={p}
                 selected={selected === id}
+                hot={wire?.over === id}
                 focusId={focusId}
                 dragging={drag?.id === id}
                 resizing={resizing?.id === id}
                 onSelect={props.onSelect}
                 onBeginDrag={beginDrag}
                 onBeginResize={beginResize}
+                onBeginWire={beginWire}
                 onChange={props.onChange}
                 onMenu={props.onMenu}
                 onEditor={props.onEditor}
@@ -601,7 +859,72 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
               />
             )
           })}
+
+          {/* 正在拖的那条线画在所有卡片之上 —— 手指压着卡片时，线不该被卡片盖住 */}
+          {wire && wireStart && wireEnd ? (
+            <svg
+              aria-hidden
+              data-dd-board-wire
+              className="pointer-events-none absolute top-0 left-0 z-40 overflow-visible"
+              width="1"
+              height="1"
+            >
+              <path
+                d={wireD}
+                fill="none"
+                stroke="var(--color-green)"
+                strokeWidth={wire.over ? 2.2 : 1.6}
+                strokeDasharray={wire.over ? undefined : '7 5'}
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx={wireStart.x} cy={wireStart.y} r={3.5} fill="var(--color-green)" />
+              {/* 吸附住了就画个明显的落点环，让人知道"松手就连这里" */}
+              {wire.over ? (
+                <circle
+                  cx={wireEnd.x}
+                  cy={wireEnd.y}
+                  r={7}
+                  fill="var(--color-green)"
+                  fillOpacity={0.16}
+                  stroke="var(--color-green)"
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : (
+                <circle cx={wireEnd.x} cy={wireEnd.y} r={2.5} fill="var(--color-green)" />
+              )}
+            </svg>
+          ) : null}
         </div>
+
+        {/* 选中连接的小工具条：贴在曲线中点上方 */}
+        {selLink && selLinkMid ? (
+          <div
+            data-dd-canvas-ui
+            data-dd-link-toolbar
+            className="absolute z-20 flex -translate-x-1/2 -translate-y-full items-center gap-0.5 rounded-lg border border-line bg-surface px-1 py-0.5 shadow-[0_8px_24px_rgba(16,35,28,0.14)]"
+            style={{
+              left: view.x + selLinkMid.x * view.z,
+              top: view.y + selLinkMid.y * view.z - 8,
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <span className="px-1 text-[10.5px] whitespace-nowrap text-ink-3">
+              {LINK_LABEL[selLink.type] ?? selLink.type}
+            </span>
+            <ToolBtn label="编辑这条连接" onClick={() => props.onEditLink(selLink.id)}>
+              <Pencil className="size-3.5" />
+            </ToolBtn>
+            <ToolBtn label="反转方向" onClick={() => props.onReverseLink(selLink.id)}>
+              <ArrowLeftRight className="size-3.5" />
+            </ToolBtn>
+            <span className="mx-0.5 h-4 w-px bg-line" />
+            <ToolBtn label="删除这条连接" danger onClick={() => props.onDeleteLink(selLink.id)}>
+              <Trash2 className="size-3.5" />
+            </ToolBtn>
+          </div>
+        ) : null}
 
         {/* 选中块的工具条：屏幕空间，缩放不影响它的大小 */}
         {selected && selRect ? (
@@ -732,12 +1055,15 @@ type CardProps = {
   block: BoardBlock
   pos: Pos
   selected: boolean
+  /** 拖线时线头悬在这张卡上（就是松手会连上的那张） */
+  hot: boolean
   focusId: string | null
   dragging: boolean
   resizing: boolean
   onSelect: (id: string) => void
   onBeginDrag: (e: React.PointerEvent, id: string) => void
   onBeginResize: (e: React.PointerEvent, id: string) => void
+  onBeginWire: (e: React.PointerEvent, id: string, side: AnchorSide) => void
   onChange: (id: string, patch: Partial<BoardBlock>) => void
   onMenu: (id: string, x: number, y: number) => void
   onEditor: (id: string, ed: Editor | null) => void
@@ -749,7 +1075,7 @@ type CardProps = {
 }
 
 function CanvasCard(props: CardProps) {
-  const { block, pos, selected, dragging, resizing } = props
+  const { block, pos, selected, hot, dragging, resizing } = props
   const ref = useRef<HTMLDivElement | null>(null)
   const { onSize } = props
 
@@ -772,23 +1098,25 @@ function CanvasCard(props: CardProps) {
       data-dd-board-block={block.id}
       data-block-type={block.type}
       data-selected={selected ? 'true' : undefined}
-      className={[
-        'group absolute',
-        dragging ? 'z-30 cursor-grabbing' : 'cursor-default',
-        'rounded-xl',
-        bare ? '' : 'bg-surface',
-        selected
-          ? 'ring-2 ring-green/45'
-          : bare
-            ? 'hover:ring-1 hover:ring-line'
-            : 'ring-1 ring-line/70 hover:ring-line',
-        // 没有底色的块（标题）不加投影 —— 影子会透过透明背景糊在纸面上，看着像脏了
-        bare
-          ? ''
-          : dragging || selected
-            ? 'shadow-[0_12px_32px_rgba(16,35,28,0.16)]'
-            : 'shadow-[0_1px_2px_rgba(16,35,28,0.05)]',
-      ].join(' ')}
+        className={[
+          'group absolute',
+          dragging ? 'z-30 cursor-grabbing' : 'cursor-default',
+          'rounded-xl',
+          bare ? '' : 'bg-surface',
+          hot
+            ? 'ring-2 ring-green/70'
+            : selected
+              ? 'ring-2 ring-green/45'
+              : bare
+                ? 'hover:ring-1 hover:ring-line'
+                : 'ring-1 ring-line/70 hover:ring-line',
+          // 没有底色的块（标题）不加投影 —— 影子会透过透明背景糊在纸面上，看着像脏了
+          bare
+            ? ''
+            : dragging || selected
+              ? 'shadow-[0_12px_32px_rgba(16,35,28,0.16)]'
+              : 'shadow-[0_1px_2px_rgba(16,35,28,0.05)]',
+        ].join(' ')}
       style={{ left: pos.x, top: pos.y, width: pos.w ?? 320 }}
       onPointerDown={(e) => {
         const el = e.target as HTMLElement
@@ -818,24 +1146,52 @@ function CanvasCard(props: CardProps) {
         />
       </div>
 
-      {/* 拖动条：悬停时卡片顶上浮出一条小握把。正文里按住拖仍然是选字，互不打架 */}
+      {/*
+        四个连接锚点：四边中点，悬停或选中时出现。
+        从这里拖出去就是连线 —— 不用先选中、再点按钮、再在对话框里挑目标。
+        锚点抢不到"拖动卡片"和"拖边缘改宽"：那两个手柄因此挪到了左上角和右下角。
+      */}
+      {ANCHOR_SIDES.map((side) => (
+        <span
+          key={side}
+          role="button"
+          tabIndex={-1}
+          aria-label={`从${SIDE_LABEL[side]}拖出连接`}
+          title="拖到另一块，建立连接"
+          data-dd-port={side}
+          data-dd-no-drag
+          onPointerDown={(e) => props.onBeginWire(e, block.id, side)}
+          className={[
+            'absolute z-10 size-2.5 cursor-crosshair rounded-full border border-ink-3/55 bg-surface',
+            'shadow-[0_1px_2px_rgba(16,35,28,0.14)]',
+            'transition-[transform,opacity,background-color,border-color] duration-100',
+            'hover:scale-150 hover:border-green hover:bg-green',
+            PORT_POS[side],
+            selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+          ].join(' ')}
+        />
+      ))}
+
+      {/* 拖动条：悬停时左上角浮出一个小握把。正文里按住拖仍然是选字，互不打架 */}
       <span
         aria-hidden
         data-dd-no-drag
         data-dd-card-grip
         title="按住拖动这块"
-        className="absolute -top-1.5 left-1/2 h-2 w-11 -translate-x-1/2 cursor-grab rounded-full bg-ink-3/30 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
+        className="absolute -top-2 -left-2 size-3.5 cursor-grab rounded-full border border-line bg-surface opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
         onPointerDown={(e) => props.onBeginDrag(e, block.id)}
       />
 
-      {/* 调宽：只改宽度，高度跟着内容走 */}
+      {/* 调宽：只改宽度，高度跟着内容走。放右下角，和右边中点的连接锚点错开 */}
       <span
         aria-hidden
         data-dd-no-drag
         title="拖动调整宽度"
         className={[
-          'absolute top-1/2 -right-1 h-10 w-2 -translate-y-1/2 cursor-ew-resize rounded-full transition-colors',
-          resizing ? 'bg-green/60' : 'bg-transparent group-hover:bg-line',
+          'absolute -right-1.5 -bottom-1.5 size-3 cursor-ew-resize rounded-full border transition-colors',
+          resizing
+            ? 'border-green bg-green'
+            : 'border-line bg-surface opacity-0 group-hover:opacity-100',
         ].join(' ')}
         onPointerDown={(e) => props.onBeginResize(e, block.id)}
       />

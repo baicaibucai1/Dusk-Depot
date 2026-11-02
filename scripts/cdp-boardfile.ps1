@@ -341,6 +341,99 @@ if ($rh -ne '') {
 }
 Shot 'canvas-moved'
 
+Write-Host 'F2. 悬停卡片：四个锚点都出来，而且不和拖动/调宽手柄抢位置'
+$cbox = BoxOf '[data-dd-card="n1"]'
+if ($cbox -ne '') {
+  $cb = $cbox.Split(',')
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = [double]$cb[0]; y = [double]$cb[1]; buttons = 0 })
+  Start-Sleep -Milliseconds 350
+  $op = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [data-dd-port=\"top\"]"); if (!el) return "-1"; return String(getComputedStyle(el).opacity) })()'
+  Check '悬停后锚点可见（不是藏着摸不到）' ([double]$op -gt 0.5) "opacity=$op"
+  $opGrip = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [data-dd-card-grip]"); return el ? String(getComputedStyle(el).opacity) : "-1" })()'
+  $opResize = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [title=\"拖动调整宽度\"]"); return el ? String(getComputedStyle(el).opacity) : "-1" })()'
+  Check '拖动握把和调宽手柄也一起出来' (([double]$opGrip -gt 0.5) -and ([double]$opResize -gt 0.5)) "grip=$opGrip resize=$opResize"
+  $shapes = Eval '(() => { const card = document.querySelector("[data-dd-card=\"n1\"]"); const items = [...card.querySelectorAll("[data-dd-port], [data-dd-card-grip], [title=\"拖动调整宽度\"]")]; return JSON.stringify(items.map((el) => { const r = el.getBoundingClientRect(); return { k: el.dataset.ddPort || el.getAttribute("title"), x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } })) })()'
+  $list = $shapes | ConvertFrom-Json
+  Check '四个锚点 + 两个手柄都在' ($list.Count -eq 6) "n=$($list.Count)"
+  $clash = @()
+  for ($i = 0; $i -lt $list.Count; $i++) {
+    for ($j = $i + 1; $j -lt $list.Count; $j++) {
+      $a = $list[$i]; $b = $list[$j]
+      if ($a.x -lt ($b.x + $b.w) -and ($a.x + $a.w) -gt $b.x -and $a.y -lt ($b.y + $b.h) -and ($a.y + $a.h) -gt $b.y) {
+        $clash += "$($a.k)/$($b.k)"
+      }
+    }
+  }
+  Check '锚点和手柄互不重叠（不然会抢鼠标）' ($clash.Count -eq 0) "clash=$($clash -join ',')"
+  Shot 'canvas-hover-ports'
+} else {
+  Check '悬停后锚点可见（不是藏着摸不到）' $false 'no card'
+  Check '四个锚点 + 两个手柄都在' $false 'no card'
+  Check '锚点和手柄互不重叠（不然会抢鼠标）' $false 'no card'
+}
+
+Write-Host 'G0. 直接拖线：从卡片边上的圆点拖到另一块就建连接'
+$linksBefore = [int](Eval "$BOARD.links.length")
+$portCount = Num 'document.querySelectorAll("[data-dd-card] [data-dd-port]").length'
+Check '每张卡都有四个连接锚点' ($portCount -ge 12) "n=$portCount"
+$wireFrom = BoxOf '[data-dd-card="n2"] [data-dd-port="right"]'
+$wireTo = BoxOf '[data-dd-card="n1"] [data-dd-port="bottom"]'
+Check '拿得到起点锚点' ($wireFrom -ne '') "pt=$wireFrom"
+Check '拿得到目标锚点' ($wireTo -ne '') "pt=$wireTo"
+$hitOk = Eval "(() => { const p = '$wireTo'.split(',').map(Number); const el = document.elementFromPoint(p[0], p[1]); return Boolean(el && el.closest('[data-dd-card=\"n1\"]')) })()"
+Check '松手点确实落在 n1 上' ([bool]$hitOk) "target=$wireTo"
+if ($wireFrom -ne '' -and $wireTo -ne '') {
+  $wf = $wireFrom.Split(',')
+  $wt = $wireTo.Split(',')
+  # 拖到一半先停一下：应该出现一条跟着走的预览线
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$wf[0]; y = [double]$wf[1]; button = 'left'; clickCount = 1; buttons = 1 })
+  Start-Sleep -Milliseconds 60
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = [double]$wt[0]; y = [double]$wt[1]; button = 'left'; buttons = 1 })
+  Start-Sleep -Milliseconds 250
+  Check '拖动中有预览线' ((Num 'document.querySelectorAll("[data-dd-board-wire]").length') -eq 1) ''
+  Check '悬停的卡片被标出来' ((Num 'document.querySelectorAll("[data-dd-card=\"n1\"][class*=ring-green]").length') -eq 1) ''
+  Shot 'canvas-wire'
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$wt[0]; y = [double]$wt[1]; button = 'left'; clickCount = 1; buttons = 0 })
+  Start-Sleep -Milliseconds 1100
+  $linksAfter = [int](Eval "$BOARD.links.length")
+  Check '松手就多了一条连接' ($linksAfter -eq $linksBefore + 1) "before=$linksBefore after=$linksAfter"
+  $wireLink = Eval "(() => { const d = $BOARD; const l = d.links[d.links.length-1]; return JSON.stringify({ from: l.from, to: l.to, type: l.type, fromSide: l.fromSide, toSide: l.toSide }) })()"
+  Check '连接记下了起点和终点' ([bool]("$wireLink" -match '"from":"n2"') -and [bool]("$wireLink" -match '"to":"n1"')) "link=$wireLink"
+  Check '记下从哪条边拖出来的' ([bool]("$wireLink" -match '"fromSide":"right"')) "link=$wireLink"
+  Check '终点吸附到朝向起点的那条边' ([bool]("$wireLink" -match '"toSide":"bottom"')) "link=$wireLink"
+  Check '默认是「相关」类型（不用先选）' ([bool]("$wireLink" -match '"type":"related"')) "link=$wireLink"
+  Check '画布上多了一条线' ((Num 'document.querySelectorAll("[data-dd-board-link]").length') -eq $linksAfter) ''
+  Check '提示说清楚了这两块连上了' ([bool]((Eval 'document.body.innerText') -match '已连接')) ''
+  Check '拖完落盘了' ((Eval 'document.querySelector("header span[aria-live]")?.textContent') -eq '已保存') ''
+} else {
+  Check '松手就多了一条连接' $false 'no port'
+  Check '连接记下了起点和终点' $false 'no port'
+  Check '记下从哪条边拖出来的' $false 'no port'
+  Check '终点吸附到朝向起点的那条边' $false 'no port'
+  Check '默认是「相关」类型（不用先选）' $false 'no port'
+  Check '画布上多了一条线' $false 'no port'
+  Check '提示说清楚了这两块连上了' $false 'no port'
+  Check '拖完落盘了' $false 'no port'
+}
+
+Write-Host 'G0b. 拖到空白处不建连接，并且明说没连上'
+$linksKeep = [int](Eval "$BOARD.links.length")
+$blankFrom = BoxOf '[data-dd-card="n2"] [data-dd-port="top"]'
+$blankAt = Eval '(() => { const r = document.querySelector("[data-dd-board-canvas]").getBoundingClientRect(); return [Math.round(r.left + 70), Math.round(r.top + 70)].join(",") })()'
+if ($blankFrom -ne '') {
+  $bf = $blankFrom.Split(',')
+  $ba = $blankAt.Split(',')
+  DragTo ([double]$bf[0]) ([double]$bf[1]) ([double]$ba[0]) ([double]$ba[1])
+  Start-Sleep -Milliseconds 700
+  Check '空白处松手不会建连接' ([int](Eval "$BOARD.links.length") -eq $linksKeep) ''
+  Check '并且提示没连上（不是静默失败）' ([bool]((Eval 'document.body.innerText') -match '没连上')) ''
+  Check '预览线收掉了' ((Num 'document.querySelectorAll("[data-dd-board-wire]").length') -eq 0) ''
+} else {
+  Check '空白处松手不会建连接' $false 'no port'
+  Check '并且提示没连上（不是静默失败）' $false 'no port'
+  Check '预览线收掉了' $false 'no port'
+}
+
 Write-Host 'G. 建立连接（选中块 → 工具条）'
 [void](Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"]"); el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 })); window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true })); return true })()')
 Start-Sleep -Milliseconds 400
@@ -351,9 +444,10 @@ Check '打开连接对话框' ((Num 'document.querySelectorAll("[role=dialog][ar
 [void](Eval '(() => { const s = document.querySelector("[role=dialog] select"); if (!s) return false; s.value = s.options[1] ? s.options[1].value : s.value; s.dispatchEvent(new Event("change", { bubbles: true })); return true })()')
 [void](Eval '(() => { const b = [...document.querySelectorAll("[role=dialog] button")].find((x) => (x.textContent||"").trim() === "建立连接"); if (b) b.click(); return true })()')
 Start-Sleep -Milliseconds 1000
-Check '磁盘上多了一条连接' ((Eval "$BOARD.links.length") -eq 2) "links=$(Eval "$BOARD.links.length")"
-Check '画布上多了一条曲线' ((Num 'document.querySelectorAll("[data-dd-board-link]").length') -eq 2) ''
-Check '连接面板列出两条' ((Num 'document.querySelectorAll("[data-dd-board-link-row]").length') -eq 2) ''
+$linksViaDialog = [int](Eval "$BOARD.links.length")
+Check '磁盘上多了一条连接' ($linksViaDialog -eq $linksKeep + 1) "links=$linksViaDialog"
+Check '画布上每条连接都画出来了' ((Num 'document.querySelectorAll("[data-dd-board-link]").length') -eq $linksViaDialog) ''
+Check '连接面板列出全部' ((Num 'document.querySelectorAll("[data-dd-board-link-row]").length') -eq $linksViaDialog) ''
 Shot 'canvas-links'
 
 Write-Host 'G2. 关掉重开：坐标、连接、正文都还在'
@@ -365,7 +459,7 @@ Check '白板标签关掉了' ((Num 'document.querySelectorAll("[data-dd-board-c
 Start-Sleep -Milliseconds 1700
 $posAfter = Eval "JSON.stringify($BOARD.layout.pos)"
 Check '重开后每块的位置一模一样' ($posAfter -eq $posBefore) "before=$posBefore after=$posAfter"
-Check '重开后连接还在' ((Num 'document.querySelectorAll("[data-dd-board-link]").length') -eq 2) ''
+Check '重开后连接还在' ((Num 'document.querySelectorAll("[data-dd-board-link]").length') -eq $linksViaDialog) "want=$linksViaDialog"
 Check '重开后正文就是改过的那份' ([bool]((Eval 'document.querySelector("[data-dd-board-canvas]")?.innerText ?? ""') -match '（已改）')) ''
 
 Write-Host 'H. 保存失败：状态必须是失败，重试能成功'
@@ -401,7 +495,7 @@ Check '编辑器里的标题也换了' ((Eval 'document.querySelector("input[ari
 
 Write-Host 'J. .note 的引用块：按 id 认，改名后仍然指向它'
 Check '点开周会' (ClickText '周会') ''
-Start-Sleep -Milliseconds 1700
+Start-Sleep -Milliseconds 2400
 $refText = Eval 'document.querySelector("[data-dd-flow-scroll]")?.innerText.replace(/\n+/g, " / ") ?? ""'
 Check '引用块显示的是新名字（按 boardId 认出来的）' ([bool]("$refText" -match '项目白板')) "text=$refText"
 Check '没有出现「白板找不到」' (-not [bool]("$refText" -match '白板找不到')) "text=$refText"

@@ -286,7 +286,8 @@ $env:Path = 'C:\Users\Sogap\msys64\mingw64\bin;' + $env:Path
     "pos": { "n1": { "x": 40, "y": 40, "w": 460 }, "n2": { "x": 120, "y": 240, "w": 320 } }
   },
   "blocks": { "n1": { "id": "n1", "type": "paragraph", "content": [ … ] } },
-  "links":  [ { "id": "l1", "from": "n1", "to": "n2", "type": "depends", "label": "" } ]
+  "links":  [ { "id": "l1", "from": "n1", "to": "n2", "type": "depends", "label": "",
+                "fromSide": "right", "toSide": "left" } ]
 }
 ```
 
@@ -294,10 +295,17 @@ $env:Path = 'C:\Users\Sogap\msys64\mingw64\bin;' + $env:Path
   空格 / 中键 / 拖空白处都是抓手。右下角有 −/+、百分比（点一下回 100%）、「适合内容」。
   视口记在本机 `localStorage`（纯 UI 状态，不进仓库文件）。
 - **块**：文字 / 标题 / 待办 / 引用 / 图片 / 文件 / 分隔线，摆在哪由 `pos` 决定；
-  悬停卡片顶上浮出握把（按住拖），右边缘可以调宽（`pos.w`），双击空白处就地加一块。
+  悬停卡片左上角浮出握把（按住拖），右下角可以调宽（`pos.w`），双击空白处就地加一块。
   正文仍是 `Inline[]`，所以 `.note` 和 `.board` 的文字块共用同一个单块编辑器。
-- **连接**：`links` 里只有 `from / to / type / label`，画成从朝向对方那条边出发的贝塞尔曲线；
-  细线也有 14px 的命中区，点一下选中、`Delete` 删除。连接不改变任何块的位置。
+- **连接（直接拖）**：悬停卡片，四条边中点各出现一个小圆点；从圆点按住拖到另一块，
+  松手就建好一条「相关」连接 —— 不用先进对话框。拖的时候目标卡片会亮起来、线头吸附到
+  离你最近的那条边；拖到画布边缘会自动平移，好去连视野外的那块；`Esc` 取消。
+  建好后点线会浮出一条工具条：改类型/说明、反转方向、删除。
+- **锚边**：`links` 里多记 `fromSide` / `toSide`（`top|right|bottom|left`）。
+  从哪个圆点拉出来的，重开还在那个点。没记锚边的老连接按两块相对位置自动选边，
+  并加一点弧度（否则上下正对时是一根直棍，看着像分隔线）。
+- **连接的数据**仍然只有 `from / to / type / label` + 两个可选的锚边：连接不改变任何块的位置。
+  细线有 16px 的透明命中区，点一下选中、`Delete` 删除。
 - **'stack' 是旧版**：早期写出来的白板没有坐标（`mode: "stack"`）。读的时候按一列兜底摆出来，
   **不自动改文件**；拖动任意一块才会切成 `free` 并把坐标写进去。
 - **附件**：点"复制进来"的文件存到 `.dusk/board/<boardId>/`（`.dusk` 开头，文件树不列）。
@@ -441,7 +449,7 @@ scripts/cdp-settings.ps1  # 设置：打开面板、拖字号、自定义字体�
 scripts/cdp-jump.ps1      # 跳转：双击双链切到那一篇、悬空链自动建
 scripts/cdp-link.ps1      # 标准链接：插入 [标题](路径)、双击跳转
 scripts/cdp-board.ps1     # .note（v3 纵向画布）：新建、回车换块、待办、连接、拖动、assets、重开、旧版只读
-scripts/cdp-boardfile.ps1 # .board：新建/打开/改名/移动/删除、编辑保存、撤销重做、连接线、.note 引用块与重定位、PDF 图标
+scripts/cdp-boardfile.ps1 # .board：新建/打开/改名/移动/删除、编辑保存、撤销重做、拖线建连接、.note 引用块与重定位、PDF 图标
 scripts/cdp-flow.ps1      # .note（v1/v2 旧版）：只读打开、坐标/块结构保留、打开不写盘
 scripts/cdp-preview.ps1   # 图片 / PDF：多页连续滚动、滑块缩放、文本层、Blob 释放
 scripts/cdp-shelf.ps1     # 书架：导入、判重、DRM、权限、搬迁、回收站、仓库 EPUB

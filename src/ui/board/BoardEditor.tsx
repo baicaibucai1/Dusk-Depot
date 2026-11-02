@@ -20,6 +20,7 @@ import type { Editor } from '@tiptap/core'
 import { Link2, Plus, Redo2, RotateCw, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  type AnchorSide,
   type BoardBlock,
   type BoardBlockType,
   type BoardFileDoc,
@@ -40,10 +41,12 @@ import {
   parseBoardFile,
   removeBlock,
   removeLink,
+  reverseLink,
   serializeBoardFile,
   setPos,
   titleOfBoardPath,
   updateBlock,
+  updateLink,
 } from '../../core/board/file'
 import { decodeBytes } from '../../core/model/text'
 import type { Host } from '../../core/ports/host'
@@ -128,6 +131,8 @@ export function BoardEditor({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
   const [linkFrom, setLinkFrom] = useState<string | null>(null)
+  /** 正在编辑的连接 id（改类型 / 说明 / 目标） */
+  const [linkEdit, setLinkEdit] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [selectedLink, setSelectedLink] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
@@ -731,6 +736,85 @@ export function BoardEditor({
     setShowLinks(true)
   }
 
+  /* ── 连接：拖出来 / 改 / 反向 / 删 ── */
+
+  /**
+   * 从锚点拖到另一块松手。
+   *
+   * 这里只补一条默认的「相关」连接 —— 拖拽的意图是"这两块有关系"，
+   * 类型和说明可以之后再改（选中线就有工具条）。要是先弹对话框，
+   * 拖一下被打断一次，画布上根本连不成串。
+   */
+  const createLink = (from: string, to: string, fromSide: AnchorSide, toSide: AnchorSide | null) => {
+    const d = docRef.current
+    if (!d || from === to) return
+    const exists = d.links.find((l) => l.from === from && l.to === to)
+    if (exists) {
+      setSelected(null)
+      setSelectedLink(exists.id)
+      notify('这两块之间已经有连接了；点住那条线可以改类型或加说明')
+      return
+    }
+    const link: BoardLink = {
+      id: `l-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      from,
+      to,
+      type: 'related',
+      label: '',
+      ...(fromSide ? { fromSide } : {}),
+      ...(toSide ? { toSide } : {}),
+      createdAt: Date.now(),
+    }
+    commit(addLink(d, link))
+    setSelected(null)
+    setSelectedLink(link.id)
+    notify(
+      `已连接「${blockLabel(d.blocks[from], from)}」→「${blockLabel(d.blocks[to], to)}」；点这条线可改类型`,
+    )
+  }
+
+  const editLink = (rel: { to: string; type: LinkType; label: string }) => {
+    const d = docRef.current
+    const id = linkEdit
+    if (!d || !id) return
+    const cur = d.links.find((l) => l.id === id)
+    if (!cur) return
+    setLinkEdit(null)
+    commit(
+      updateLink(d, id, {
+        to: rel.to,
+        type: rel.type,
+        label: rel.label,
+        // 目标换了，原来的入线锚点可能不再朝向起点 —— 清掉，让它按新位置自己选边
+        ...(rel.to !== cur.to ? { toSide: undefined } : {}),
+      }),
+    )
+    setSelectedLink(id)
+    notify('连接已更新')
+  }
+
+  const flipLink = (id: string) => {
+    const d = docRef.current
+    if (!d) return
+    const l = d.links.find((x) => x.id === id)
+    if (!l) return
+    if (d.links.some((x) => x.id !== id && x.from === l.to && x.to === l.from)) {
+      notify('反方向已经有一条连接了，先删掉那条再转')
+      return
+    }
+    commit(reverseLink(d, id))
+    setSelectedLink(id)
+    notify('方向已调转')
+  }
+
+  const dropLink = (id: string) => {
+    const d = docRef.current
+    if (!d) return
+    commit(removeLink(d, id))
+    setSelectedLink(null)
+    notify('连接已删除（两块本身都还在）')
+  }
+
   /* ── 渲染 ── */
 
   if (load.t === 'loading') {
@@ -754,6 +838,11 @@ export function BoardEditor({
   if (!doc) return null
 
   const linkCount = doc.links.length
+  const editingLink = linkEdit ? (doc.links.find((l) => l.id === linkEdit) ?? null) : null
+  const dialogBlocks = doc.layout.order
+    .map((id) => doc.blocks[id])
+    .filter((b): b is BoardBlock => Boolean(b))
+    .map((b) => ({ id: b.id, label: blockLabel(b, b.id) }))
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-paper">
@@ -870,6 +959,10 @@ export function BoardEditor({
           onDuplicate={duplicate}
           onDelete={removeOne}
           onConnect={(id) => setLinkFrom(id)}
+          onCreateLink={createLink}
+          onEditLink={(id) => setLinkEdit(id)}
+          onReverseLink={flipLink}
+          onDeleteLink={dropLink}
           onAdd={addAt}
           onEditor={registerEditor}
           onDropFiles={(files, at) => void dropFiles(files, at)}
@@ -899,8 +992,8 @@ export function BoardEditor({
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {doc.links.length === 0 ? (
                 <p className="px-2 py-6 text-center text-[11px] leading-relaxed text-ink-3">
-                  还没有连接。选中一块 → 工具条上的链接按钮，或者右键 →「连接到…」，
-                  选目标块和关系类型。连好的两块之间会出现一条曲线。
+                  还没有连接。把鼠标放到一块上，从卡片边上的小圆点拖到另一块，松手就连上了。
+                  想指定关系类型，就用选中块 → 工具条上的链接按钮，或右键 →「连接到…」。
                 </p>
               ) : (
                 <ul className="flex flex-col gap-1">
@@ -950,7 +1043,8 @@ export function BoardEditor({
                 </ul>
               )}
               <p className="mt-2 px-2 text-[10px] leading-relaxed text-ink-3/70">
-                连接只表示块之间的关系，不会移动块。点一条可以把它的目标块在画布上居中。
+                连接只表示块之间的关系，不会移动块。点一条线可以改类型、调转方向或删除；
+                点条目能把它的目标块在画布上居中。
               </p>
             </div>
           </aside>
@@ -1009,12 +1103,23 @@ export function BoardEditor({
       {linkFrom ? (
         <RelationDialog
           fromId={linkFrom}
-          blocks={doc.layout.order
-            .map((id) => doc.blocks[id])
-            .filter((b): b is BoardBlock => Boolean(b))
-            .map((b) => ({ id: b.id, label: blockLabel(b, b.id) }))}
+          blocks={dialogBlocks}
           onSave={saveLink}
           onClose={() => setLinkFrom(null)}
+        />
+      ) : null}
+
+      {editingLink ? (
+        <RelationDialog
+          fromId={editingLink.from}
+          blocks={dialogBlocks}
+          initial={{ to: editingLink.to, type: editingLink.type, label: editingLink.label }}
+          title="编辑这条连接"
+          ariaLabel="编辑块间连接"
+          submitLabel="保存"
+          hint="改类型或写一句说明；换目标块会重新选一条入线边。"
+          onSave={editLink}
+          onClose={() => setLinkEdit(null)}
         />
       ) : null}
 

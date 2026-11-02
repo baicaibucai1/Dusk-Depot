@@ -21,9 +21,11 @@ import {
   posOf,
   removeBlock,
   removeLink,
+  reverseLink,
   serializeBoardFile,
   setPos,
   updateBlock,
+  updateLink,
   type BoardFileDoc,
 } from '../../src/core/board/file'
 import { refsOfBoard, resolveBoard, scanBoardRefs } from '../../src/core/board/refs'
@@ -458,5 +460,101 @@ describe('.board 画布：自由坐标', () => {
     if (parsed.kind !== 'ok') throw new Error('parse failed')
     expect(parsed.doc.layout.mode).toBe('free')
     expect(parsed.doc.layout.pos).toEqual({ n1: { x: -40, y: 88, w: 512 } })
+  })
+})
+
+describe('连接：锚边、改、反向', () => {
+  const withLink = (): BoardFileDoc =>
+    addLink(docWithBlocks(), {
+      id: 'l2',
+      from: 'n2',
+      to: 'n3',
+      type: 'related',
+      label: '',
+      fromSide: 'right',
+      toSide: 'left',
+      createdAt: 2,
+    })
+
+  it('锚边能原样往返（从哪个圆点拖出来的，重开还在那个点）', () => {
+    const parsed = parseBoardFile(serializeBoardFile(withLink()))
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    const l = parsed.doc.links.find((x) => x.id === 'l2')
+    expect(l?.fromSide).toBe('right')
+    expect(l?.toSide).toBe('left')
+  })
+
+  it('锚边写坏时只丢这个字段，连接本身留着', () => {
+    const text = JSON.stringify({
+      app: 'dusk-depot',
+      format: 'board',
+      version: 1,
+      boardId: 'bd-x',
+      title: 't',
+      layout: { mode: 'free', order: ['a', 'b'] },
+      blocks: {
+        a: { id: 'a', type: 'paragraph', content: [] },
+        b: { id: 'b', type: 'paragraph', content: [] },
+      },
+      links: [{ id: 'l1', from: 'a', to: 'b', type: 'related', label: '', fromSide: '斜着' }],
+    })
+    const parsed = parseBoardFile(text)
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    expect(parsed.doc.links).toHaveLength(1)
+    const kept = parsed.doc.links[0]
+    expect(kept?.fromSide).toBeUndefined()
+    expect(kept?.toSide).toBeUndefined()
+  })
+
+  it('没记锚边的老连接照样能读（线自己找边）', () => {
+    const parsed = parseBoardFile(serializeBoardFile(docWithBlocks()))
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    const old = parsed.doc.links[0]
+    expect(old?.fromSide).toBeUndefined()
+    expect(old?.type).toBe('depends')
+    expect(old?.label).toBe('先做这个')
+  })
+
+  it('updateLink 只动这一条，别的连接和块不受影响', () => {
+    const before = withLink()
+    const after = updateLink(before, 'l2', { type: 'source', label: '出处' })
+    const l2 = after.links.find((x) => x.id === 'l2')
+    expect(l2?.type).toBe('source')
+    expect(l2?.label).toBe('出处')
+    expect(l2?.fromSide).toBe('right')
+    expect(after.links.find((x) => x.id === 'l1')).toEqual(before.links.find((x) => x.id === 'l1'))
+    expect(after.blocks).toEqual(before.blocks)
+    expect(after.layout).toEqual(before.layout)
+  })
+
+  it('updateLink 传 undefined 是"清掉锚边"，不是存一个 undefined', () => {
+    const after = updateLink(withLink(), 'l2', { toSide: undefined })
+    const l2 = after.links.find((x) => x.id === 'l2')
+    expect(l2 && 'toSide' in l2).toBe(false)
+    expect(l2?.fromSide).toBe('right')
+    expect(JSON.parse(serializeBoardFile(after)).links[1].toSide).toBeUndefined()
+  })
+
+  it('updateLink 找不到 id 就原样返回（引用同一个对象，不制造假改动）', () => {
+    const doc = withLink()
+    expect(updateLink(doc, 'nope', { label: 'x' })).toBe(doc)
+  })
+
+  it('reverseLink 对调起点终点，锚边换到对面', () => {
+    const after = reverseLink(withLink(), 'l2')
+    const l2 = after.links.find((x) => x.id === 'l2')
+    expect(l2?.from).toBe('n3')
+    expect(l2?.to).toBe('n2')
+    expect(l2?.fromSide).toBe('right') // 原来的左边 → 反过来是右边
+    expect(l2?.toSide).toBe('left')
+  })
+
+  it('reverseLink 不动没有锚边的连接（不会凭空长出边）', () => {
+    const after = reverseLink(docWithBlocks(), 'l1')
+    const l1 = after.links.find((x) => x.id === 'l1')
+    expect(l1?.from).toBe('n2')
+    expect(l1?.to).toBe('n1')
+    expect(l1?.fromSide).toBeUndefined()
+    expect(l1?.toSide).toBeUndefined()
   })
 })

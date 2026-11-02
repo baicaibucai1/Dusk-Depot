@@ -92,6 +92,25 @@ export type BoardBlock = {
   extra?: Record<string, unknown>
 }
 
+/**
+ * 连接从卡片的哪条边出入。
+ *
+ * 为什么记这个：拖拽连线时用户是**从某个圆点拉出去**的，那条线就该从那个点出发，
+ * 重开白板也不能自己跑到另一边去。没记（老数据、或从菜单建的连接）就按两块相对位置自动选。
+ */
+export type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
+
+export const ANCHOR_SIDES: AnchorSide[] = ['top', 'right', 'bottom', 'left']
+
+export function isAnchorSide(v: unknown): v is AnchorSide {
+  return v === 'top' || v === 'right' || v === 'bottom' || v === 'left'
+}
+
+/** 反过来那条边（连接反向时用） */
+export function flipSide(side: AnchorSide): AnchorSide {
+  return side === 'top' ? 'bottom' : side === 'bottom' ? 'top' : side === 'left' ? 'right' : 'left'
+}
+
 export type LinkType = 'related' | 'depends' | 'source' | 'custom'
 
 export const LINK_TYPES: { id: LinkType; label: string }[] = [
@@ -110,6 +129,10 @@ export type BoardLink = {
   type: LinkType
   /** 人写的说明 */
   label: string
+  /** 出线边。缺省 = 按两块相对位置自动选 */
+  fromSide?: AnchorSide
+  /** 入线边。缺省 = 按两块相对位置自动选 */
+  toSide?: AnchorSide
   createdAt: number
   /** 不认识的字段，原样保留 */
   extra?: Record<string, unknown>
@@ -282,7 +305,16 @@ function parseLink(raw: unknown, warnings: string[]): BoardLink | null {
       : 'related'
   const extra: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(o)) {
-    if (k !== 'id' && k !== 'from' && k !== 'to' && k !== 'type' && k !== 'label' && k !== 'createdAt') {
+    if (
+      k !== 'id' &&
+      k !== 'from' &&
+      k !== 'to' &&
+      k !== 'type' &&
+      k !== 'label' &&
+      k !== 'createdAt' &&
+      k !== 'fromSide' &&
+      k !== 'toSide'
+    ) {
       extra[k] = v
     }
   }
@@ -294,6 +326,9 @@ function parseLink(raw: unknown, warnings: string[]): BoardLink | null {
     label: typeof o.label === 'string' ? o.label : '',
     createdAt: typeof o.createdAt === 'number' && Number.isFinite(o.createdAt) ? o.createdAt : Date.now(),
   }
+  // 锚边只认那四个值：坏掉的丢掉（让线自己找位置），不因为一个字段废掉整条连接
+  if (isAnchorSide(o.fromSide)) link.fromSide = o.fromSide
+  if (isAnchorSide(o.toSide)) link.toSide = o.toSide
   if (Object.keys(extra).length > 0) link.extra = extra
   return link
 }
@@ -633,6 +668,38 @@ export function addLink(doc: BoardFileDoc, link: BoardLink): BoardFileDoc {
 
 export function removeLink(doc: BoardFileDoc, id: string): BoardFileDoc {
   return { ...doc, links: doc.links.filter((l) => l.id !== id) }
+}
+
+/** 改一条已有连接（类型 / 说明 / 目标 / 锚边）。只动这一条，块和其它连接不受影响 */
+export function updateLink(
+  doc: BoardFileDoc,
+  id: string,
+  patch: Partial<Omit<BoardLink, 'id'>>,
+): BoardFileDoc {
+  if (!doc.links.some((l) => l.id === id)) return doc
+  return {
+    ...doc,
+    links: doc.links.map((l) => {
+      if (l.id !== id) return l
+      const next: BoardLink = { ...l, ...patch, id: l.id }
+      // 传 undefined 表示"清掉"（把锚边改回自动选），不是存一个 undefined 进去
+      if ('fromSide' in patch && patch.fromSide === undefined) delete next.fromSide
+      if ('toSide' in patch && patch.toSide === undefined) delete next.toSide
+      return next
+    }),
+  }
+}
+
+/** 反向：起点终点对调，锚边跟着换到对面 */
+export function reverseLink(doc: BoardFileDoc, id: string): BoardFileDoc {
+  const l = doc.links.find((x) => x.id === id)
+  if (!l) return doc
+  const next: BoardLink = { ...l, from: l.to, to: l.from }
+  if (l.toSide) next.fromSide = flipSide(l.toSide)
+  else delete next.fromSide
+  if (l.fromSide) next.toSide = flipSide(l.fromSide)
+  else delete next.toSide
+  return { ...doc, links: doc.links.map((x) => (x.id === id ? next : x)) }
 }
 
 export function linksOf(doc: BoardFileDoc, blockId: string): BoardLink[] {

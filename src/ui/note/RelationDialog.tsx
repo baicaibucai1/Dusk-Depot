@@ -10,15 +10,40 @@ import { RELATION_TYPES, type RelationType } from '../../core/note/board'
 type Props = {
   fromId: string
   blocks: { id: string; label: string }[]
+  /** 编辑已有连接时的初值（不传就是新建） */
+  initial?: { to: string; type: RelationType; label: string }
+  /** 可见标题，默认是新建时的文案 */
+  title?: string
+  /** 无障碍名。新建/编辑各一个，读屏和脚本都靠它区分 */
+  ariaLabel?: string
+  /** 主按钮文案 */
+  submitLabel?: string
+  /** 标题下面那句说明 */
+  hint?: string
   onSave: (rel: { to: string; type: RelationType; label: string }) => void
   onClose: () => void
 }
 
-export function RelationDialog({ fromId, blocks, onSave, onClose }: Props) {
+export function RelationDialog({
+  fromId,
+  blocks,
+  initial,
+  title = '连接到另一个块',
+  ariaLabel = '新建块间连接',
+  submitLabel = '建立连接',
+  hint = '连接是两个块之间的关系，不会移动块，也不会改变顺序。',
+  onSave,
+  onClose,
+}: Props) {
   const targets = blocks.filter((b) => b.id !== fromId)
-  const [to, setTo] = useState(targets[0]?.id ?? '')
-  const [type, setType] = useState<RelationType>('related')
-  const [label, setLabel] = useState('')
+  const [to, setTo] = useState(() => {
+    const want = initial?.to
+    // 初值指向的块可能已经被删了：那就退回第一个可选目标，别让"保存"点了没反应
+    if (want && targets.some((b) => b.id === want)) return want
+    return targets[0]?.id ?? ''
+  })
+  const [type, setType] = useState<RelationType>(initial?.type ?? 'related')
+  const [label, setLabel] = useState(initial?.label ?? '')
   const input = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -35,17 +60,15 @@ export function RelationDialog({ fromId, blocks, onSave, onClose }: Props) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="新建块间连接"
+        aria-label={ariaLabel}
         className="w-[440px] rounded-xl border border-line bg-surface p-4 shadow-[0_18px_44px_rgba(16,35,28,0.2)]"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
         }}
       >
-        <p className="text-[13.5px] font-medium text-ink">连接到另一个块</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
-          连接是两个块之间的关系，不会移动块，也不会改变顺序。
-        </p>
+        <p className="text-[13.5px] font-medium text-ink">{title}</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-ink-3">{hint}</p>
 
         <div className="mt-3 flex flex-col gap-2.5">
           <label className="flex flex-col gap-1">
@@ -105,7 +128,7 @@ export function RelationDialog({ fromId, blocks, onSave, onClose }: Props) {
             onClick={() => onSave({ to, type, label: label.trim() })}
             className="rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep disabled:opacity-45"
           >
-            建立连接
+            {submitLabel}
           </button>
         </div>
       </div>
