@@ -115,13 +115,21 @@ export type BoardLink = {
   extra?: Record<string, unknown>
 }
 
-/** 布局：现在只有纵向堆叠；`free` 预留（坐标存在 `pos` 里，读到时原样带着） */
+/** 自由画布上的一个位置：左上角坐标 + 卡片宽度（高度由内容决定，量出来的不算进模型） */
+export type Pos = { x: number; y: number; w?: number }
+
+/**
+ * 布局：`free` = 无限画布（默认），`stack` = 旧版纵向堆叠。
+ *
+ * `stack` 是这一版之前写出来的白板。**不自动迁移**：读的时候按一列兜底摆出来，
+ * 用户第一次拖动/调宽才变成 `free` 并把坐标写进文件。
+ */
 export type BoardLayout = {
   mode: BoardLayoutMode
-  /** 纵向顺序：块 id 列表 */
+  /** 块的插入顺序。画布上不用它排版，但它是稳定的枚举顺序（导出/大纲/兜底都靠它） */
   order: string[]
-  /** 自由画布的坐标，未实现但在数据里保留 */
-  pos?: Record<string, { x: number; y: number }>
+  /** 每个块的坐标与宽度 */
+  pos?: Record<string, Pos>
 }
 
 export type BoardFileDoc = {
@@ -239,6 +247,26 @@ export function parseBlock(id: string, raw: unknown): BoardBlock {
   return block // divider
 }
 
+/**
+ * 读坐标。数字必须有限，缺 `w` 就留空（由界面按类型给默认宽度）。
+ * 坏掉的坐标**整条丢掉**，让那块回到兜底位置 —— 宁可位置不对，也不要 NaN 把画布撑爆。
+ */
+function posOfRaw(raw: unknown): { pos?: Record<string, Pos> } {
+  const o = asObject(raw)
+  if (!o) return {}
+  const pos: Record<string, Pos> = {}
+  for (const [id, v] of Object.entries(o)) {
+    const p = asObject(v)
+    if (!p || !id) continue
+    const x = typeof p.x === 'number' && Number.isFinite(p.x) ? p.x : null
+    const y = typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : null
+    if (x === null || y === null) continue
+    const w = typeof p.w === 'number' && Number.isFinite(p.w) && p.w > 0 ? p.w : undefined
+    pos[id] = w ? { x, y, w } : { x, y }
+  }
+  return Object.keys(pos).length > 0 ? { pos } : {}
+}
+
 function parseLink(raw: unknown, warnings: string[]): BoardLink | null {
   const o = asObject(raw)
   if (!o) return null
@@ -350,15 +378,14 @@ export function parseBoardFile(text: string, fallbackTitle = '未命名白板'):
     }
   }
 
-  let layout: BoardLayout = { mode: 'stack', order: [] }
+  let layout: BoardLayout = { mode: 'free', order: [] }
   const layoutRaw = asObject(o.layout)
   if (layoutRaw) {
-    const mode = layoutRaw.mode === 'free' ? 'free' : 'stack'
+    const mode = layoutRaw.mode === 'stack' ? 'stack' : 'free'
     const order = Array.isArray(layoutRaw.order)
       ? layoutRaw.order.filter((x): x is string => typeof x === 'string')
       : []
-    const pos = asObject(layoutRaw.pos) as BoardLayout['pos'] | null
-    layout = { mode, order, ...(pos ? { pos } : {}) }
+    layout = { mode, order, ...posOfRaw(layoutRaw.pos) }
   } else if (o.layout !== undefined) {
     warnings.push('layout 格式不对，改按块的出现顺序排；块和连接都没动')
   }
@@ -366,8 +393,11 @@ export function parseBoardFile(text: string, fallbackTitle = '未命名白板'):
   // 顺序表里没有的块补到末尾：宁可多显示，也不静默丢块
   for (const id of Object.keys(blocks)) if (!layout.order.includes(id)) layout.order.push(id)
   layout.order = layout.order.filter((id) => Boolean(blocks[id]))
-  if (layout.mode === 'free' && !layout.pos) {
-    warnings.push('这块白板标记为自由排布，但坐标数据不在；先按纵向显示，数据没动')
+  if (layout.mode === 'stack' && Object.keys(blocks).length > 0) {
+    // 旧版纵向白板：能读，按一列显示；用户一拖就变成 free（见 setPos）
+    if (!layout.pos || Object.keys(layout.pos).length === 0) {
+      warnings.push('这块白板是旧版纵向排列（没有坐标）；按一列显示，拖动任意一块就会切换成自由画布')
+    }
   }
 
   const links: BoardLink[] = []
@@ -493,7 +523,7 @@ export function newBoardFile(title: string, now = new Date()): BoardFileDoc {
     title,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    layout: { mode: 'stack', order: [] },
+    layout: { mode: 'free', order: [] },
     blocks: {},
     links: [],
   }
@@ -539,10 +569,19 @@ export function insertBlock(doc: BoardFileDoc, afterId: string | null, block: Bo
 export function removeBlock(doc: BoardFileDoc, id: string): BoardFileDoc {
   const blocks = { ...doc.blocks }
   delete blocks[id]
+  const pos = { ...(doc.layout.pos ?? {}) }
+  delete pos[id]
+
+  const layout: BoardLayout = {
+    mode: doc.layout.mode,
+    order: doc.layout.order.filter((x) => x !== id),
+  }
+  if (Object.keys(pos).length > 0) layout.pos = pos
+
   return {
     ...doc,
     blocks,
-    layout: { ...doc.layout, order: doc.layout.order.filter((x) => x !== id) },
+    layout,
     // 块没了，挂在它身上的连接一起收掉（连接不能指向空气）
     links: doc.links.filter((l) => l.from !== id && l.to !== id),
   }
@@ -576,7 +615,11 @@ export function duplicateBlock(doc: BoardFileDoc, id: string): { doc: BoardFileD
     content: block.content ? block.content.map((x) => ({ ...x })) : undefined,
     raw: block.raw ? { ...block.raw, id: nextId } : undefined,
   }
-  return { doc: insertBlock(doc, id, copy), id: nextId }
+  let next = insertBlock(doc, id, copy)
+  // 复制出来的那块往右下错开一点，否则正好压在原件上，看着像没复制
+  const at = posOf(doc, id)
+  if (at) next = setPos(next, nextId, { ...at, x: at.x + 28, y: at.y + 28 })
+  return { doc: next, id: nextId }
 }
 
 export function addLink(doc: BoardFileDoc, link: BoardLink): BoardFileDoc {
@@ -594,6 +637,80 @@ export function removeLink(doc: BoardFileDoc, id: string): BoardFileDoc {
 
 export function linksOf(doc: BoardFileDoc, blockId: string): BoardLink[] {
   return doc.links.filter((l) => l.from === blockId || l.to === blockId)
+}
+
+/* ───────────────────────── 画布坐标 ───────────────────────── */
+
+/**
+ * 各类卡片的默认宽度。
+ *
+ * 画布上**不靠文字撑宽度**：文字一长卡片就变形，整块白板的版面会跟着抖。
+ * 所以宽度按类型定一个手感值，用户想改就拖右边那条边（写进 `pos.w`）。
+ */
+export const CARD_W: Record<BoardBlockType, number> = {
+  paragraph: 320,
+  heading1: 460,
+  heading2: 380,
+  quote: 320,
+  todo: 320,
+  image: 380,
+  file: 360,
+  divider: 260,
+  unknown: 320,
+}
+
+export function defaultWidth(type: BoardBlockType): number {
+  return CARD_W[type] ?? 320
+}
+
+export function posOf(doc: BoardFileDoc, id: string): Pos | null {
+  return doc.layout.pos?.[id] ?? null
+}
+
+/** 挪一块。**第一次挪动就把 mode 切成 free** —— 这是唯一"顺手迁移"的地方，且由用户动作触发 */
+export function setPos(doc: BoardFileDoc, id: string, pos: Pos): BoardFileDoc {
+  if (!doc.blocks[id]) return doc
+  const cur = doc.layout.pos?.[id]
+  const w = pos.w ?? cur?.w
+  const next: Pos = {
+    x: Math.round(pos.x),
+    y: Math.round(pos.y),
+    ...(w && Number.isFinite(w) ? { w: Math.round(w) } : {}),
+  }
+  if (cur && cur.x === next.x && cur.y === next.y && cur.w === next.w) return doc
+  return {
+    ...doc,
+    layout: { ...doc.layout, mode: 'free', pos: { ...(doc.layout.pos ?? {}), [id]: next } },
+  }
+}
+
+/**
+ * 没有坐标的块（旧版纵向白板）按一列兜底摆出来。
+ * **只算不写** —— 打开旧白板不该悄悄改文件。
+ */
+export function fallbackPositions(doc: BoardFileDoc): Record<string, Pos> {
+  const out: Record<string, Pos> = {}
+  let y = 0
+  for (const id of doc.layout.order) {
+    const b = doc.blocks[id]
+    if (!b) continue
+    out[id] = { x: 0, y, w: defaultWidth(b.type) }
+    // 高度量不出来（还没渲染），给一个够用的行距，保证兜底时不会叠在一起
+    y += b.type === 'heading1' ? 140 : 110
+  }
+  return out
+}
+
+/** 界面用：每块最终落在哪儿 —— 文件里的坐标优先，没有就按顺序兜底 */
+export function layoutOf(doc: BoardFileDoc): Record<string, Pos> {
+  const fallback = fallbackPositions(doc)
+  const out: Record<string, Pos> = {}
+  for (const id of doc.layout.order) {
+    const b = doc.blocks[id]
+    if (!b) continue
+    out[id] = doc.layout.pos?.[id] ?? fallback[id] ?? { x: 0, y: 0, w: defaultWidth(b.type) }
+  }
+  return out
 }
 
 /* ───────────────────────── 展示 / 命名 ───────────────────────── */

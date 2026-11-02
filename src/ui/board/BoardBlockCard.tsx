@@ -1,19 +1,20 @@
 /*
- * `.board` 的一张块卡片。
+ * `.board` 一块卡片的**内容**（不含定位、拖动、工具条 —— 那些在 BoardCanvas 里）。
  *
- * 和 `.note` 的 BoardCard 是两套东西，别合并：
- *   · `.note` 的块属于"一篇文档"，菜单里是转换/连接；
- *   · `.board` 的块属于"一块白板"，菜单里是复制/复制到白板/引用仓库文件，
- *     而且图片和文件要**说清楚自己是复制的还是引用的**（见卡片右上角的小标记）。
+ * 为什么拆开：画布那一层负责"在哪儿、多大、选中没选中"，这一层只负责
+ * "这块是什么类型、长什么样、点了算谁的"。两块职责混在一起的话，
+ * 想改画布手势就得动内容渲染，迟早互相绊住。
  *
- * 卡片只负责长什么样、点了算谁的；所有改数据的事回调给 BoardEditor。
+ * 图片和文件有两种来路，卡片上必须说清楚：
+ *   · 已复制 —— 文件在 `.dusk/board/<boardId>/` 里，原文件删了也不影响
+ *   · 引用   —— 只记仓库里的路径，原文件改名/删掉就会失效（红条 + 重新选择）
  */
 import type { Editor } from '@tiptap/core'
-import { Copy, FileText, GripVertical, Image as ImageIcon, Link2, MoreHorizontal, RotateCw } from 'lucide-react'
+import { Copy, FileText, Image as ImageIcon, Link2, RotateCw } from 'lucide-react'
 import { useState } from 'react'
 import type { BoardBlock, BlockSource } from '../../core/board/file'
-import type { Inline } from '../../core/note/flow'
 import { kindOf } from '../../core/model/fileKind'
+import type { Inline } from '../../core/note/flow'
 import type { Host } from '../../core/ports/host'
 import { useAssetExists, useAssetUrl } from '../assetUrl'
 import { FileGlyph } from '../fileIcon'
@@ -22,193 +23,115 @@ import { BoardTextEditor } from '../note/BoardTextEditor'
 type Props = {
   host: Host
   block: BoardBlock
-  index: number
   autoFocus: boolean
-  selected: boolean
-  flash: boolean
-  linkCount: number
   onChange: (id: string, patch: Partial<BoardBlock>) => void
-  onMenu: (id: string, x: number, y: number) => void
-  onSelect: (id: string) => void
-  onHover: (id: string | null) => void
   onEnterEnd: (id: string) => void
   onBackspaceEmpty: (id: string) => void
   onEditor: (id: string, editor: Editor | null) => void
-  onDragStart: (id: string) => void
-  onDragEnd: () => void
-  onDragOver: (e: React.DragEvent, index: number) => void
-  onDrop: () => void
-  /** 复制进来的图片 / 文件 */
-  onPickAsset: (id: string, kind: 'image' | 'file', mode: BlockSource) => void
-  /** 打开仓库里的一个文件（md / pdf / 图片 / 白板） */
   onOpenFile: (path: string) => void
-  onShowLinks: (id: string) => void
-  onMove: (id: string, dir: -1 | 1) => void
   onNotice: (text: string) => void
+  /** 换图 / 换文件：mode 决定是复制进来还是引用仓库文件 */
+  onPickAsset?: (id: string, kind: 'image' | 'file', mode: BlockSource) => void
 }
 
 const TEXT = new Set(['paragraph', 'heading1', 'heading2', 'quote', 'todo'])
 
-export function BoardBlockCard(props: Props) {
-  const { block, index, selected, flash, linkCount } = props
-  const bare = block.type === 'heading1' || block.type === 'heading2' || block.type === 'divider'
+export function BoardBlockBody(props: Props) {
+  const { block, onChange } = props
 
-  const shell = [
-    'group relative rounded-xl transition-[background-color,box-shadow]',
-    bare ? 'px-3 py-1' : 'border border-line bg-surface px-4 py-3',
-    flash
-      ? 'bg-green-soft ring-1 ring-green/35'
-      : selected
-        ? 'ring-1 ring-green/45'
-        : bare
-          ? 'hover:bg-surface-2/60'
-          : 'hover:border-line hover:bg-surface-2/20',
-  ].join(' ')
-
-  return (
-    <div
-      data-dd-board-block={block.id}
-      data-block-type={block.type}
-      data-selected={selected ? 'true' : undefined}
-      className="relative"
-      onMouseDown={() => props.onSelect(block.id)}
-      onMouseEnter={() => props.onHover(block.id)}
-      onMouseLeave={() => props.onHover(null)}
-      onDragOver={(e) => props.onDragOver(e, index)}
-      onDrop={(e) => {
-        e.preventDefault()
-        props.onDrop()
-      }}
-    >
-      {/* 左侧留白里的操作：不压正文，也不推对齐线 */}
-      <div className="absolute top-1.5 -left-8 flex flex-col items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-        <button
-          type="button"
-          draggable
-          aria-label={`拖动块：${block.id}`}
-          title="拖动排序（Alt+↑/↓ 也可以）"
-          onDragStart={(e) => {
-            e.stopPropagation()
-            e.dataTransfer.effectAllowed = 'move'
-            e.dataTransfer.setData('application/x-dusk-board-block', block.id)
-            props.onDragStart(block.id)
-          }}
-          onDragEnd={props.onDragEnd}
-          onKeyDown={(e) => {
-            if (!e.altKey) return
-            if (e.key === 'ArrowUp') {
-              e.preventDefault()
-              props.onMove(block.id, -1)
-            } else if (e.key === 'ArrowDown') {
-              e.preventDefault()
-              props.onMove(block.id, 1)
-            }
-          }}
-          className="grid size-6 cursor-grab place-items-center rounded text-ink-3/70 hover:bg-surface-2 hover:text-ink-2 active:cursor-grabbing"
-        >
-          <GripVertical className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          aria-label={`块 ${block.id} 的菜单`}
-          title="块菜单"
-          onClick={(e) => {
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            props.onMenu(block.id, r.left - 150, r.bottom + 4)
-          }}
-          className="grid size-6 place-items-center rounded text-ink-3/70 hover:bg-surface-2 hover:text-ink-2"
-        >
-          <MoreHorizontal className="size-3.5" />
-        </button>
-      </div>
-
-      {linkCount > 0 ? (
-        <button
-          type="button"
-          onClick={() => props.onShowLinks(block.id)}
-          className="absolute -top-2 right-2 z-10 inline-flex items-center gap-0.5 rounded-full border border-line bg-surface px-1.5 py-[1px] text-[9.5px] text-ink-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-green"
-          title="查看这个块的连接"
-        >
-          <Link2 className="size-2.5" />
-          {linkCount}
-        </button>
-      ) : null}
-
-      <div className={shell}>
-        {TEXT.has(block.type) ? (
-          block.type === 'todo' ? (
-            <div className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(block.checked)}
-                onChange={(e) => props.onChange(block.id, { checked: e.target.checked })}
-                aria-label="勾选待办"
-                className="mt-[7px] size-[14px] shrink-0 cursor-pointer accent-[var(--color-green)]"
-              />
-              <div className={['min-w-0 flex-1', block.checked ? 'dd-board-todo-done' : ''].join(' ')}>
-                <BoardTextEditor
-                  block={block}
-                  autoFocus={props.autoFocus}
-                  onChange={(content: Inline[]) => props.onChange(block.id, { content })}
-                  onEnterEnd={() => props.onEnterEnd(block.id)}
-                  onBackspaceEmpty={() => props.onBackspaceEmpty(block.id)}
-                  onEditor={props.onEditor}
-                />
-              </div>
-            </div>
-          ) : block.type === 'quote' ? (
-            <div className="border-l-[3px] border-[#d5e6dd] pl-3 text-ink-2">
-              <BoardTextEditor
-                block={block}
-                autoFocus={props.autoFocus}
-                onChange={(content) => props.onChange(block.id, { content })}
-                onEnterEnd={() => props.onEnterEnd(block.id)}
-                onBackspaceEmpty={() => props.onBackspaceEmpty(block.id)}
-                onEditor={props.onEditor}
-              />
-            </div>
-          ) : (
+  if (TEXT.has(block.type)) {
+    if (block.type === 'todo') {
+      return (
+        <div className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={Boolean(block.checked)}
+            onChange={(e) => onChange(block.id, { checked: e.target.checked })}
+            aria-label="勾选待办"
+            className="mt-[7px] size-[14px] shrink-0 cursor-pointer accent-[var(--color-green)]"
+          />
+          <div className={['min-w-0 flex-1', block.checked ? 'dd-board-todo-done' : ''].join(' ')}>
             <BoardTextEditor
               block={block}
               autoFocus={props.autoFocus}
-              onChange={(content) => props.onChange(block.id, { content })}
+              onChange={(content: Inline[]) => onChange(block.id, { content })}
               onEnterEnd={() => props.onEnterEnd(block.id)}
               onBackspaceEmpty={() => props.onBackspaceEmpty(block.id)}
               onEditor={props.onEditor}
             />
-          )
-        ) : block.type === 'divider' ? (
-          <div className="py-2">
-            <hr className="border-0 border-t border-line" />
           </div>
-        ) : block.type === 'image' ? (
-          <ImageCard
-            host={props.host}
+        </div>
+      )
+    }
+    if (block.type === 'quote') {
+      return (
+        <div className="border-l-[3px] border-[#d5e6dd] pl-3 text-ink-2">
+          <BoardTextEditor
             block={block}
-            onPick={(mode) => props.onPickAsset(block.id, 'image', mode)}
-            onOpen={() => block.src && props.onOpenFile(block.src)}
+            autoFocus={props.autoFocus}
+            onChange={(content) => onChange(block.id, { content })}
+            onEnterEnd={() => props.onEnterEnd(block.id)}
+            onBackspaceEmpty={() => props.onBackspaceEmpty(block.id)}
+            onEditor={props.onEditor}
           />
-        ) : block.type === 'file' ? (
-          <FileCard
-            host={props.host}
-            block={block}
-            onPick={(mode) => props.onPickAsset(block.id, 'file', mode)}
-            onOpen={() => block.src && props.onOpenFile(block.src)}
-            onNotice={props.onNotice}
-          />
-        ) : (
-          <UnknownBlock block={block} />
-        )}
+        </div>
+      )
+    }
+    return (
+      <BoardTextEditor
+        block={block}
+        autoFocus={props.autoFocus}
+        onChange={(content) => onChange(block.id, { content })}
+        onEnterEnd={() => props.onEnterEnd(block.id)}
+        onBackspaceEmpty={() => props.onBackspaceEmpty(block.id)}
+        onEditor={props.onEditor}
+      />
+    )
+  }
+
+  if (block.type === 'divider') {
+    return (
+      <div className="py-2">
+        <hr className="border-0 border-t border-line" />
       </div>
-    </div>
-  )
+    )
+  }
+
+  if (block.type === 'image') {
+    return (
+      <ImageBody
+        host={props.host}
+        block={block}
+        onPick={(mode) => props.onPickAsset?.(block.id, 'image', mode)}
+        onOpen={() => block.src && props.onOpenFile(block.src)}
+      />
+    )
+  }
+
+  if (block.type === 'file') {
+    return (
+      <FileBody
+        host={props.host}
+        block={block}
+        onPick={(mode) => props.onPickAsset?.(block.id, 'file', mode)}
+        onOpen={() => block.src && props.onOpenFile(block.src)}
+        onNotice={props.onNotice}
+      />
+    )
+  }
+
+  return <UnknownBlock block={block} />
 }
 
 function SourceBadge({ source }: { source: BlockSource }) {
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-[1px] text-[9.5px] text-ink-3"
-      title={source === 'copy' ? '这个文件是复制进白板的；原文件删了也不影响' : '只记了仓库里的路径；原文件改名/删掉后会失效'}
+      title={
+        source === 'copy'
+          ? '这个文件是复制进白板的；原文件删了也不影响'
+          : '只记了仓库里的路径；原文件改名/删掉后会失效'
+      }
     >
       {source === 'copy' ? <Copy className="size-2.5" /> : <Link2 className="size-2.5" />}
       {source === 'copy' ? '已复制' : '引用'}
@@ -231,7 +154,7 @@ function MissingHint({ label, onPick }: { label: string; onPick: () => void }) {
   )
 }
 
-function ImageCard({
+function ImageBody({
   host,
   block,
   onPick,
@@ -262,7 +185,7 @@ function ImageCard({
   }
 
   return (
-    <figure className="py-1">
+    <figure>
       <div className="mb-1.5 flex items-center gap-2">
         <SourceBadge source={source} />
         <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-ink-3">{block.src}</span>
@@ -279,14 +202,14 @@ function ImageCard({
           正在读取图片…
         </div>
       ) : (
-        <img src={url ?? ''} alt={block.alt ?? ''} className="max-h-[460px] max-w-full rounded-lg" />
+        <img src={url ?? ''} alt={block.alt ?? ''} className="max-h-[460px] w-full rounded-lg object-contain" />
       )}
       {block.alt ? <figcaption className="mt-1 text-[11px] text-ink-3">{block.alt}</figcaption> : null}
     </figure>
   )
 }
 
-function FileCard({
+function FileBody({
   host,
   block,
   onPick,
@@ -323,6 +246,8 @@ function FileCard({
     }
   }
 
+  const openable = Boolean(block.src) && kindOf(block.src ?? '') !== 'unknown'
+
   return (
     <div className="flex flex-col gap-2">
       {exists === false ? <MissingHint label={`找不到文件：${block.src}`} onPick={() => onPick(source)} /> : null}
@@ -342,7 +267,7 @@ function FileCard({
         </span>
         <button
           type="button"
-          onClick={() => (kindOf(block.src ?? '') === 'unknown' || !block.src ? void download() : onOpen())}
+          onClick={() => (openable ? onOpen() : void download())}
           disabled={busy || !block.src}
           className="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-ink-2 hover:bg-surface-2 disabled:opacity-50"
         >

@@ -11,15 +11,18 @@ import {
   duplicateBlock,
   insertBlock,
   isCopiedAsset,
+  layoutOf,
   linksOf,
   moveBlockTo,
   newBlock,
   newBoardFile,
   nextBlockId,
   parseBoardFile,
+  posOf,
   removeBlock,
   removeLink,
   serializeBoardFile,
+  setPos,
   updateBlock,
   type BoardFileDoc,
 } from '../../src/core/board/file'
@@ -341,5 +344,119 @@ describe('白板引用：按 id 认，不按路径认', () => {
     expect(files[`${dir}/blocks/b2.json`]).toContain('boardref')
     const parsed = await scanBoardRefs([dir], async () => files)
     expect(parsed.failed).toEqual([])
+  })
+})
+
+describe('.board 画布：自由坐标', () => {
+  it('新白板默认就是自由画布', () => {
+    expect(newBoardFile('t').layout.mode).toBe('free')
+  })
+
+  it('挪一块会把旧版纵向白板切成自由画布', () => {
+    const stack = parseBoardFile(
+      JSON.stringify({
+        format: 'board',
+        version: 1,
+        boardId: 'bd-x',
+        title: 't',
+        layout: { mode: 'stack', order: ['n1', 'n2'] },
+        blocks: {
+          n1: { id: 'n1', type: 'paragraph', content: [] },
+          n2: { id: 'n2', type: 'paragraph', content: [] },
+        },
+        links: [],
+      }),
+    )
+    if (stack.kind !== 'ok') throw new Error('parse failed')
+    expect(stack.doc.layout.mode).toBe('stack')
+
+    const moved = setPos(stack.doc, 'n2', { x: 120, y: 260 })
+    expect(moved.layout.mode).toBe('free')
+    expect(posOf(moved, 'n2')).toEqual({ x: 120, y: 260 })
+    // 没挪的那块还是没坐标 —— 由兜底位置顶上，不算丢
+    expect(posOf(moved, 'n1')).toBeNull()
+  })
+
+  it('坐标取整、宽度保留；没变化时不产生新对象（避免假 diff）', () => {
+    const doc = newBoardFile('t')
+    const withBlock = insertBlock(doc, null, newBlock('paragraph', 'n1'))
+
+    const a = setPos(withBlock, 'n1', { x: 10.4, y: 20.6, w: 300.2 })
+    expect(posOf(a, 'n1')).toEqual({ x: 10, y: 21, w: 300 })
+
+    const same = setPos(a, 'n1', { x: 10, y: 21, w: 300 })
+    expect(same).toBe(a)
+  })
+
+  it('宽度可以单独调，坐标不变', () => {
+    const doc = insertBlock(newBoardFile('t'), null, newBlock('paragraph', 'n1'))
+    const a = setPos(doc, 'n1', { x: 5, y: 5, w: 320 })
+    const b = setPos(a, 'n1', { x: 5, y: 5, w: 420 })
+    expect(posOf(b, 'n1')).toEqual({ x: 5, y: 5, w: 420 })
+  })
+
+  it('layoutOf：有坐标用坐标，没坐标按顺序兜底成一列（行距够高，不会叠）', () => {
+    let doc = insertBlock(newBoardFile('t'), null, newBlock('paragraph', 'n1'))
+    doc = insertBlock(doc, 'n1', newBlock('paragraph', 'n2'))
+    doc = insertBlock(doc, 'n2', newBlock('paragraph', 'n3'))
+    const placed = setPos(doc, 'n2', { x: 400, y: 10 })
+    const spots = layoutOf(placed)
+    expect(spots.n2).toEqual({ x: 400, y: 10 })
+    expect(spots.n1?.x).toBe(0)
+    expect(spots.n1?.y).toBe(0)
+    // 没坐标的两块落在同一列上，且隔得开
+    expect(spots.n3?.x).toBe(0)
+    expect((spots.n3?.y ?? 0) - (spots.n1?.y ?? 0)).toBeGreaterThanOrEqual(150)
+  })
+
+  it('坏坐标整条丢掉，不把 NaN 带进画布', () => {
+    const parsed = parseBoardFile(
+      JSON.stringify({
+        format: 'board',
+        version: 1,
+        boardId: 'bd-x',
+        title: 't',
+        layout: {
+          mode: 'free',
+          order: ['n1', 'n2', 'n3'],
+          pos: { n1: { x: 1, y: 2 }, n2: { x: 'x', y: 2 }, n3: { x: 3 } },
+        },
+        blocks: {
+          n1: { id: 'n1', type: 'paragraph', content: [] },
+          n2: { id: 'n2', type: 'paragraph', content: [] },
+          n3: { id: 'n3', type: 'paragraph', content: [] },
+        },
+        links: [],
+      }),
+    )
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    expect(parsed.doc.layout.pos).toEqual({ n1: { x: 1, y: 2 } })
+    // 剩下两块仍能显示（靠兜底）
+    expect(Object.keys(layoutOf(parsed.doc))).toEqual(['n1', 'n2', 'n3'])
+  })
+
+  it('删块把坐标一起清掉，不留死数据', () => {
+    let doc = insertBlock(newBoardFile('t'), null, newBlock('paragraph', 'n1'))
+    doc = setPos(doc, 'n1', { x: 10, y: 10 })
+    const next = removeBlock(doc, 'n1')
+    expect(next.layout.pos).toBeUndefined()
+  })
+
+  it('复制出来的块往右下错开 28px，不压在原件上', () => {
+    let doc = insertBlock(newBoardFile('t'), null, newBlock('paragraph', 'n1'))
+    doc = setPos(doc, 'n1', { x: 100, y: 100, w: 320 })
+    const dup = duplicateBlock(doc, 'n1')
+    expect(dup).not.toBeNull()
+    if (!dup) return
+    expect(posOf(dup.doc, dup.id)).toEqual({ x: 128, y: 128, w: 320 })
+  })
+
+  it('坐标和宽度能原样往返', () => {
+    let doc = insertBlock(newBoardFile('t'), null, newBlock('image', 'n1'))
+    doc = setPos(doc, 'n1', { x: -40, y: 88, w: 512 })
+    const parsed = parseBoardFile(serializeBoardFile(doc))
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    expect(parsed.doc.layout.mode).toBe('free')
+    expect(parsed.doc.layout.pos).toEqual({ n1: { x: -40, y: 88, w: 512 } })
   })
 })

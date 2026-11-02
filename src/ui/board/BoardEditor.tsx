@@ -1,26 +1,24 @@
 /*
- * `.board` 白板编辑器。
+ * `.board` 白板编辑器（**无限画布**）。
  *
- * ## 它和 `.note` 的 v3 画布不是同一个东西
+ * ## 它和 `.note` 的区别
  *
  *   `.note` 是**一篇文档**：块竖着排，顺序就是阅读顺序，存成一整个目录。
- *   `.board` 是**一块白板**：独立一个文件，块可以拖动排序、可以连线、可以放附件，
- *   还能被别的 `.note` 按 boardId 引用（引用块只存身份，不复制内容）。
+ *   `.board` 是**一块空间**：每块有自己的坐标（`layout.pos`），想放哪儿放哪儿；
+ *   画布能无限平移、缩放。顺序在画布上没有排版意义 —— 只作为稳定的枚举顺序留着。
  *
  * ## 三条硬规矩
  *
  *   ① **保存状态必须是真的**。保存失败就停在"保存失败"并留着待存数据，
  *      绝不显示"已保存"而磁盘上其实没写（重试按钮会再写一次）。
- *   ② **改一个块只改这一个块**。所有编辑都走 core 里的纯函数，
- *      块内容与连接各自独立，不会因为编辑文字把别的块或连接冲掉。
+ *   ② **改一块只改这一块**。所有编辑走 core 里的纯函数，块内容、坐标、连接互不牵连。
  *   ③ **未知块原样保留**。认不出的块显示成"由更新版本创建"，保存时一个字节不改。
  *
- * 连接画在左侧留白里：纵向排列下，两个块之间的关系就是一条弧线。
- * 不引入任意坐标拖拽，也不用 canvas —— 出问题的时候 DOM 还能查。
+ * 视口（平移到哪儿、缩放多少）是**纯 UI 状态**，存本机 localStorage，不进仓库文件。
  */
 import type { Editor } from '@tiptap/core'
 import { Link2, Plus, Redo2, RotateCw, Undo2, X } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type BoardBlock,
   type BoardBlockType,
@@ -33,16 +31,17 @@ import {
   blockLabel,
   copyAssetPath,
   copyDirOf,
+  defaultWidth,
   duplicateBlock,
   insertBlock,
-  linksOf,
-  moveBlockTo,
+  layoutOf,
   newBlock,
   nextBlockId,
   parseBoardFile,
   removeBlock,
   removeLink,
   serializeBoardFile,
+  setPos,
   titleOfBoardPath,
   updateBlock,
 } from '../../core/board/file'
@@ -50,7 +49,7 @@ import { decodeBytes } from '../../core/model/text'
 import type { Host } from '../../core/ports/host'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { RelationDialog } from '../note/RelationDialog'
-import { BoardBlockCard } from './BoardBlockCard'
+import { BoardCanvas, type CanvasApi } from './BoardCanvas'
 import { RepoFileDialog } from './RepoFileDialog'
 
 type Props = {
@@ -82,20 +81,25 @@ type Load =
   | { t: 'ok'; doc: BoardFileDoc; warnings: string[] }
   | { t: 'bad'; message: string }
   | { t: 'unsupported'; message: string }
-type DropAt = { index: number; after: boolean }
-type AssetAsk =
-  | { mode: 'copy'; kind: 'image' | 'file'; id?: string; afterId: string | null }
-  | { mode: 'link'; kind: 'image' | 'file'; id?: string; afterId: string | null }
+type AssetAsk = {
+  mode: 'copy' | 'link'
+  kind: 'image' | 'file'
+  /** 换图 / 换文件时指到某一块；新建时为空 */
+  id?: string
+  /** 落点（世界坐标）；null = 交给画布找空位 */
+  at: { x: number; y: number } | null
+  afterId: string | null
+}
 
-const ADD_TYPES: { type: BoardBlockType; label: string; hint: string }[] = [
-  { type: 'paragraph', label: '文字', hint: '普通文字块' },
-  { type: 'heading1', label: '标题', hint: '章节标题' },
-  { type: 'heading2', label: '小标题', hint: '小节标题' },
-  { type: 'todo', label: '待办', hint: '带勾选框' },
-  { type: 'quote', label: '引用', hint: '左侧竖线' },
-  { type: 'image', label: '图片（复制进来）', hint: '复制进白板，原文件删了也不影响' },
-  { type: 'file', label: '文件（复制进来）', hint: '复制进白板' },
-  { type: 'divider', label: '分隔线', hint: '一条横线' },
+const ADD_TYPES: { type: BoardBlockType; label: string }[] = [
+  { type: 'paragraph', label: '文字' },
+  { type: 'heading1', label: '标题' },
+  { type: 'heading2', label: '小标题' },
+  { type: 'todo', label: '待办' },
+  { type: 'quote', label: '引用' },
+  { type: 'image', label: '图片（复制进来）' },
+  { type: 'file', label: '文件（复制进来）' },
+  { type: 'divider', label: '分隔线' },
 ]
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -122,18 +126,14 @@ export function BoardEditor({
   const [notice, setNotice] = useState<string | null>(null)
   const [showLinks, setShowLinks] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
-  const [addMenu, setAddMenu] = useState<{ x: number; y: number; afterId: string | null } | null>(null)
+  const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
   const [linkFrom, setLinkFrom] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [hover, setHover] = useState<string | null>(null)
-  const [flash, setFlash] = useState<string | null>(null)
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [dropAt, setDropAt] = useState<DropAt | null>(null)
-  const [assetAsk, setAssetAsk] = useState<AssetAsk | null>(null)
-  const [pickFile, setPickFile] = useState<AssetAsk | null>(null)
+  const [selectedLink, setSelectedLink] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [hideWarnings, setHideWarnings] = useState(false)
-  const [lines, setLines] = useState<{ id: string; from: string; to: string; d: string }[]>([])
+  const [assetAsk, setAssetAsk] = useState<AssetAsk | null>(null)
+  const [pickFile, setPickFile] = useState<AssetAsk | null>(null)
   /** 只为了在撤销栈变化时重渲染（按钮的禁用状态读的是 ref） */
   const [, bumpHistory] = useState(0)
 
@@ -146,9 +146,8 @@ export function BoardEditor({
   const future = useRef<BoardFileDoc[]>([])
   const editKey = useRef<{ key: string; at: number }>({ key: '', at: 0 })
   const editors = useRef(new Map<string, Editor>())
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const listRef = useRef<HTMLDivElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const canvasRef = useRef<CanvasApi | null>(null)
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
   /** 改名提示只影响"挂载后第一次读盘"，用 ref 读，免得改个名字就整篇重读 */
@@ -175,6 +174,8 @@ export function BoardEditor({
     setStatus('saved')
     setError(null)
     setHideWarnings(false)
+    setSelected(null)
+    setSelectedLink(null)
     past.current = []
     future.current = []
     bumpHistory(0)
@@ -268,7 +269,7 @@ export function BoardEditor({
     }, SAVE_DELAY)
   }, [])
 
-  /** 落到内存 + 排一次保存。`key` 用来合并连续的同类编辑（打字不产生几十步撤销） */
+  /** 落到内存 + 排一次保存。`key` 用来合并连续的同类编辑（打字/方向键微调不产生几十步撤销） */
   const commit = useCallback(
     (next: BoardFileDoc, key?: string) => {
       const prev = docRef.current
@@ -312,6 +313,8 @@ export function BoardEditor({
     const cur = docRef.current
     if (cur) future.current.push(cur)
     editKey.current = { key: '', at: 0 }
+    setSelected((s) => (s && prev.blocks[s] ? s : null))
+    setSelectedLink(null)
     bumpHistory((n) => n + 1)
     restore(prev)
   }, [restore])
@@ -346,12 +349,13 @@ export function BoardEditor({
     return () => window.clearTimeout(t)
   }, [notice])
 
+  /* 新块 / 新加图片：把焦点交给它的编辑器 */
   useEffect(() => {
     if (!focusId) return
     const t = window.setTimeout(() => {
       editors.current.get(focusId)?.commands.focus('end')
       setFocusId(null)
-    }, 80)
+    }, 90)
     return () => window.clearTimeout(t)
   }, [focusId])
 
@@ -360,111 +364,52 @@ export function BoardEditor({
     else editors.current.delete(id)
   }, [])
 
-  /* ── 连接线：量出每块的位置，在左侧留白里画弧 ── */
-
-  const measure = useCallback(() => {
-    const box = listRef.current
-    const cur = docRef.current
-    if (!box || !cur) return
-    const cards = new Map<string, HTMLElement>()
-    for (const el of box.querySelectorAll<HTMLElement>('[data-dd-board-block]')) {
-      cards.set(el.dataset.ddBoardBlock ?? '', el)
-    }
-    const out: { id: string; from: string; to: string; d: string }[] = []
-    cur.links.forEach((link, i) => {
-      const a = cards.get(link.from)
-      const b = cards.get(link.to)
-      if (!a || !b) return
-      const y1 = a.offsetTop + a.offsetHeight / 2
-      const y2 = b.offsetTop + b.offsetHeight / 2
-      const x = 11
-      // 同一对块之间可能有好几条连接：每条再往外偏一点，不至于完全叠在一起
-      const bow = 15 + Math.min(18, Math.abs(y2 - y1) * 0.12) + (i % 3) * 5
-      out.push({
-        id: link.id,
-        from: link.from,
-        to: link.to,
-        d: `M${x} ${y1} C ${x + bow} ${y1}, ${x + bow} ${y2}, ${x} ${y2}`,
-      })
-    })
-    setLines(out)
-  }, [])
-
-  useLayoutEffect(() => {
-    measure()
-  }, [measure, doc?.layout.order, doc?.links, doc?.blocks])
-
-  useEffect(() => {
-    if (!listRef.current || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => measure())
-    ro.observe(listRef.current)
-    window.addEventListener('resize', measure)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [measure])
-
-  /* ── 快捷键：撤销 / 重做（在块内打字时让 TipTap 自己管） ── */
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const el = e.target as HTMLElement | null
-    const inEditor = Boolean(el?.closest('.ProseMirror, input, textarea, select'))
-    if (e.key === 'Escape') {
-      setSelected(null)
-      return
-    }
-    const mod = e.ctrlKey || e.metaKey
-    if (!mod) return
-    if (e.key.toLowerCase() === 'z' && !inEditor) {
-      e.preventDefault()
-      if (e.shiftKey) redo()
-      else undo()
-      return
-    }
-    if (e.key.toLowerCase() === 'y' && !inEditor) {
-      e.preventDefault()
-      redo()
-    }
-  }
-
   /* ── 块操作 ── */
 
-  const cur = () => docRef.current
-
-  const addBlock = (type: BoardBlockType, afterId: string | null) => {
-    const d = cur()
+  const addAt = (at: { x: number; y: number }, type: BoardBlockType, afterId: string | null) => {
+    const d = docRef.current
     if (!d) return
     const id = nextBlockId(d)
-    commit(insertBlock(d, afterId, newBlock(type, id)))
+    let next = insertBlock(d, afterId, newBlock(type, id))
+    next = setPos(next, id, { x: Math.round(at.x), y: Math.round(at.y), w: defaultWidth(type) })
+    commit(next)
     setSelected(id)
+    setSelectedLink(null)
     setFocusId(id)
   }
 
   const patchBlock = (id: string, patch: Partial<BoardBlock>) => {
-    const d = cur()
+    const d = docRef.current
     if (!d) return
     // 文字块用同一个 key 合并连续输入；勾选 / 换图这类一步一次
     const key = patch.content ? `text:${id}` : ''
     commit(updateBlock(d, id, patch), key)
   }
 
-  const deleteBlock = (id: string) => {
-    const d = cur()
+  const moveTo = (id: string, pos: { x: number; y: number; w?: number }) => {
+    const d = docRef.current
     if (!d) return
-    const at = d.layout.order.indexOf(id)
+    commit(setPos(d, id, pos))
+  }
+
+  const removeOne = (id: string) => {
+    const d = docRef.current
+    if (!d) return
     const block = d.blocks[id]
     commit(removeBlock(d, id))
     setSelected(null)
-    if (block && (block.type === 'image' || block.type === 'file') && block.src?.startsWith('.dusk/board/')) {
+    setSelectedLink(null)
+    if (
+      block &&
+      (block.type === 'image' || block.type === 'file') &&
+      block.src?.startsWith('.dusk/board/')
+    ) {
       notify('块已删除；复制进白板的文件没有自动删，避免误删你的资料')
     }
-    const prev = d.layout.order[at - 1] ?? d.layout.order[at + 1] ?? null
-    if (prev) setFocusId(prev)
   }
 
   const duplicate = (id: string) => {
-    const d = cur()
+    const d = docRef.current
     if (!d) return
     const r = duplicateBlock(d, id)
     if (!r) return
@@ -473,35 +418,87 @@ export function BoardEditor({
     setFocusId(r.id)
   }
 
-  const moveBlock = (id: string, step: -1 | 1) => {
-    const d = cur()
-    if (!d) return
-    const at = d.layout.order.indexOf(id)
-    if (at < 0) return
-    const next = moveBlockTo(d, id, at + (step > 0 ? 2 : -1))
-    if (next !== d) commit(next)
-    setFocusId(id)
-  }
+  /* ── 键盘：选中块之后才生效，在编辑器里打字一律让编辑器自己处理 ── */
 
-  const handleDrop = () => {
-    const d = cur()
-    if (d && dragId && dropAt) {
-      const target = dropAt.index + (dropAt.after ? 1 : 0)
-      const next = moveBlockTo(d, dragId, target)
-      if (next !== d) commit(next)
-      setSelected(dragId)
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  keyRef.current = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null
+    if (t?.closest('input, textarea, select')) return
+    const mod = e.ctrlKey || e.metaKey
+    const k = e.key.toLowerCase()
+    /*
+     * 在块里打字时，撤销/删除这些一律交给块自己的编辑器 —— 它有自己的历史，
+     * 混着用会一步退两下。**例外**：刚加出来还是空的块，编辑器历史是空的，
+     * Ctrl+Z 在那儿等于按了没反应，这时交给画布撤销（把那块收回去）。
+     */
+    const pm = t?.closest('.ProseMirror') as HTMLElement | null
+    const pmEmpty = pm ? (pm.textContent ?? '').trim().length === 0 : false
+    if (pm && !pmEmpty) return
+    if (pm && pmEmpty && !(mod && (k === 'z' || k === 'y'))) return
+
+    if (mod && k === 'z') {
+      e.preventDefault()
+      if (e.shiftKey) redo()
+      else undo()
+      return
     }
-    setDropAt(null)
-    setDragId(null)
+    if (mod && k === 'y') {
+      e.preventDefault()
+      redo()
+      return
+    }
+    if (mod && e.key === '0') {
+      e.preventDefault()
+      canvasRef.current?.fit()
+      return
+    }
+    if (mod && e.key === '1') {
+      e.preventDefault()
+      canvasRef.current?.setZoom(1)
+      return
+    }
+    if (e.key === 'Escape') {
+      setSelected(null)
+      setSelectedLink(null)
+      return
+    }
+    if (mod && k === 'd' && selected) {
+      e.preventDefault()
+      duplicate(selected)
+      return
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const d = docRef.current
+      if (!d) return
+      if (selectedLink) {
+        e.preventDefault()
+        commit(removeLink(d, selectedLink))
+        setSelectedLink(null)
+        return
+      }
+      if (selected) {
+        e.preventDefault()
+        removeOne(selected)
+      }
+      return
+    }
+    if (selected && e.key.startsWith('Arrow')) {
+      const d = docRef.current
+      if (!d) return
+      const step = e.shiftKey ? 40 : 8
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+      if (!dx && !dy) return
+      e.preventDefault()
+      const at = layoutOf(d)[selected]
+      if (at) commit(setPos(d, selected, { ...at, x: at.x + dx, y: at.y + dy }), `pos:${selected}`)
+    }
   }
-
-  const onCardDragOver = (e: React.DragEvent, index: number) => {
-    if (!dragId) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setDropAt({ index, after: e.clientY > r.top + r.height / 2 })
-  }
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => keyRef.current(e)
+    window.addEventListener('keydown', fn)
+    return () => window.removeEventListener('keydown', fn)
+  }, [])
 
   /* ── 附件：复制 / 引用 ── */
 
@@ -526,13 +523,25 @@ export function BoardEditor({
     return dest
   }
 
-  const insertAssetBlock = (d: BoardFileDoc, src: string, file: { name: string; size?: number }, kind: 'image' | 'file', afterId: string | null, source: BlockSource) => {
+  const insertAssetBlock = (
+    d: BoardFileDoc,
+    src: string,
+    file: { name: string; size?: number },
+    kind: 'image' | 'file',
+    at: { x: number; y: number } | null,
+    afterId: string | null,
+    source: BlockSource,
+  ) => {
     const id = nextBlockId(d)
     const block: BoardBlock =
       kind === 'image'
         ? { ...newBlock('image', id), src, alt: '', source }
         : { ...newBlock('file', id), src, name: file.name, size: file.size, source }
-    commit(insertBlock(d, afterId, block))
+    let next = insertBlock(d, afterId, block)
+    // 落点已知就摆在那儿；不知道（菜单里加的）就交给画布找一块空地
+    const spot = at ?? canvasRef.current?.nextSpot(kind) ?? { x: 0, y: 0 }
+    next = setPos(next, id, { ...spot, w: defaultWidth(kind) })
+    commit(next)
     setSelected(id)
     setFocusId(id)
   }
@@ -540,12 +549,19 @@ export function BoardEditor({
   const onAssetPicked = async (file: File) => {
     const ask = assetAsk
     setAssetAsk(null)
-    const d = cur()
+    const d = docRef.current
     if (!ask || !d) return
     try {
       const src = await copyInto(d, file)
-      if (ask.id) patchBlock(ask.id, { src, source: 'copy', ...(ask.kind === 'file' ? { name: file.name, size: file.size } : {}) })
-      else insertAssetBlock(d, src, file, ask.kind, ask.afterId, 'copy')
+      if (ask.id) {
+        patchBlock(ask.id, {
+          src,
+          source: 'copy',
+          ...(ask.kind === 'file' ? { name: file.name, size: file.size } : {}),
+        })
+      } else {
+        insertAssetBlock(d, src, file, ask.kind, ask.at, ask.afterId, 'copy')
+      }
       notify(`「${file.name}」已复制进白板（原文件没动）`)
     } catch (e) {
       notify(`没能复制进来：${msg(e)}`)
@@ -555,24 +571,24 @@ export function BoardEditor({
   const onRepoPicked = (picked: string) => {
     const ask = pickFile
     setPickFile(null)
-    const d = cur()
+    const d = docRef.current
     if (!ask || !d) return
     const kind = ask.kind
     const name = picked.split('/').pop() ?? picked
     if (ask.id) {
       patchBlock(ask.id, { src: picked, source: 'link', ...(kind === 'file' ? { name } : {}) })
     } else {
-      insertAssetBlock(d, picked, { name }, kind, ask.afterId, 'link')
+      insertAssetBlock(d, picked, { name }, kind, ask.at, ask.afterId, 'link')
     }
     notify(`已引用仓库里的 ${picked}（没有复制文件）`)
   }
 
-  /** 从文件树拖进来 / 从系统拖进来：一律复制进白板 */
-  const onDropFiles = async (files: File[], afterId: string | null) => {
-    const d = cur()
+  /** 从系统拖进来：一律复制进白板，落在鼠标那儿 */
+  const dropFiles = async (files: File[], at: { x: number; y: number }) => {
+    const d = docRef.current
     if (!d || files.length === 0) return
-    let cursor = afterId
     let ok = 0
+    let cursor = at
     for (const f of files) {
       try {
         const src = await copyInto(d, f)
@@ -581,8 +597,15 @@ export function BoardEditor({
         const block: BoardBlock = img
           ? { ...newBlock('image', id), src, alt: '', source: 'copy' }
           : { ...newBlock('file', id), src, name: f.name, size: f.size, source: 'copy' }
-        commit(insertBlock(docRef.current ?? d, cursor, block))
-        cursor = id
+        let next = insertBlock(docRef.current ?? d, null, block)
+        next = setPos(next, id, {
+          x: Math.round(cursor.x),
+          y: Math.round(cursor.y),
+          w: defaultWidth(block.type),
+        })
+        commit(next)
+        setSelected(id)
+        cursor = { x: cursor.x + 36, y: cursor.y + 36 }
         ok += 1
       } catch (e) {
         notify(`「${f.name}」没能复制进来：${msg(e)}`)
@@ -591,12 +614,22 @@ export function BoardEditor({
     if (ok) notify(`已把 ${ok} 个文件复制进这块白板（原文件没动）`)
   }
 
-  /** 桌面端原生拖入：拿到的是绝对路径，先导入仓库再建块 */
+  /** 从文件树拖进来 = **引用**（不复制） */
+  const referencePath = (p: string, at: { x: number; y: number }) => {
+    const d = docRef.current
+    if (!d) return
+    const hit = repoFiles.find((f) => f.path === p)
+    if (!hit) return
+    const img = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i.test(p)
+    insertAssetBlock(d, p, { name: hit.label }, img ? 'image' : 'file', at, null, 'link')
+    notify(`已引用仓库里的 ${p}（没有复制文件）`)
+  }
+
+  /** 桌面端原生拖入：拿到的是绝对路径，先导入仓库再摆到视口中心附近 */
   const addExternalPaths = async (paths: string[]) => {
-    const d = cur()
+    const d = docRef.current
     if (!d || paths.length === 0) return
     const { importPath } = await import('../../hosts/tauri')
-    let cursor: string | null = d.layout.order[d.layout.order.length - 1] ?? null
     let ok = 0
     const bad: string[] = []
     for (const p of paths) {
@@ -609,8 +642,10 @@ export function BoardEditor({
         const block: BoardBlock = img
           ? { ...newBlock('image', id), src: dest, alt: '', source: 'copy' }
           : { ...newBlock('file', id), src: dest, name, source: 'copy' }
-        commit(insertBlock(docRef.current ?? d, cursor, block))
-        cursor = id
+        let next = insertBlock(docRef.current ?? d, null, block)
+        const spot = canvasRef.current?.nextSpot(block.type) ?? { x: 0, y: 0 }
+        next = setPos(next, id, { ...spot, w: defaultWidth(block.type) })
+        commit(next)
         ok += 1
       } catch (e) {
         bad.push(`${name}（${msg(e)}）`)
@@ -618,17 +653,6 @@ export function BoardEditor({
     }
     if (ok) notify(`已把 ${ok} 个文件复制进这块白板（原文件没动）`)
     if (bad.length) notify(`这些没能导入：${bad.join('；')}`)
-  }
-
-  /** 从文件树拖一个文件进来 = **引用**（不复制）。拖的是系统文件 = 复制。 */
-  const referenceRepoPath = (p: string, afterId: string | null) => {
-    const d = cur()
-    if (!d) return
-    const hit = repoFiles.find((f) => f.path === p)
-    if (!hit) return
-    const img = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i.test(p)
-    insertAssetBlock(d, p, { name: hit.label }, img ? 'image' : 'file', afterId, 'link')
-    notify(`已引用仓库里的 ${p}（没有复制文件）`)
   }
 
   useEffect(() => {
@@ -642,48 +666,57 @@ export function BoardEditor({
   /* ── 菜单 ── */
 
   const blockMenu = (id: string): MenuItem[] => {
-    const d = cur()
+    const d = docRef.current
     const block = d?.blocks[id]
     if (!d || !block) return []
     const items: MenuItem[] = [
-      { label: '在下方添加文字', onSelect: () => addBlock('paragraph', id) },
       { label: '复制这个块', onSelect: () => duplicate(id) },
-      { label: '上移', onSelect: () => moveBlock(id, -1) },
-      { label: '下移', onSelect: () => moveBlock(id, 1) },
-      { divider: true, label: '', onSelect: () => {} },
       { label: '连接到…', onSelect: () => setLinkFrom(id) },
     ]
-    if (block.type === 'image') {
-      items.splice(3, 0, { label: '更换图片（复制进来）…', onSelect: () => requestAsset({ mode: 'copy', kind: 'image', id, afterId: null }) })
-      items.splice(4, 0, { label: '改为引用仓库图片…', onSelect: () => requestAsset({ mode: 'link', kind: 'image', id, afterId: null }) })
-    }
-    if (block.type === 'file') {
-      items.splice(3, 0, { label: '更换文件（复制进来）…', onSelect: () => requestAsset({ mode: 'copy', kind: 'file', id, afterId: null }) })
-      items.splice(4, 0, { label: '改为引用仓库文件…', onSelect: () => requestAsset({ mode: 'link', kind: 'file', id, afterId: null }) })
+    if (block.type === 'image' || block.type === 'file') {
+      const kind = block.type
+      const what = kind === 'image' ? '图片' : '文件'
+      items.push(
+        { divider: true, label: '', onSelect: () => {} },
+        {
+          label: `更换${what}（复制进来）…`,
+          onSelect: () => requestAsset({ mode: 'copy', kind, id, at: null, afterId: null }),
+        },
+        {
+          label: `改为引用仓库${what}…`,
+          onSelect: () => requestAsset({ mode: 'link', kind, id, at: null, afterId: null }),
+        },
+      )
     }
     items.push({ divider: true, label: '', onSelect: () => {} })
-    items.push({ label: '删除这个块', danger: true, onSelect: () => deleteBlock(id) })
+    items.push({ label: '删除这个块', danger: true, onSelect: () => removeOne(id) })
     return items
   }
 
-  const addMenuItems = (afterId: string | null): MenuItem[] => [
+  const addMenuItems = (): MenuItem[] => [
     ...ADD_TYPES.map((t) => ({
       label: t.label,
       onSelect: () => {
         if (t.type === 'image' || t.type === 'file') {
-          requestAsset({ mode: 'copy', kind: t.type, afterId })
+          requestAsset({ mode: 'copy', kind: t.type, at: null, afterId: null })
         } else {
-          addBlock(t.type, afterId)
+          canvasRef.current?.addAtCenter(t.type)
         }
       },
     })),
     { divider: true, label: '', onSelect: () => {} },
-    { label: '引用仓库里的文件…', onSelect: () => requestAsset({ mode: 'link', kind: 'file', afterId }) },
-    { label: '引用仓库里的图片…', onSelect: () => requestAsset({ mode: 'link', kind: 'image', afterId }) },
+    {
+      label: '引用仓库里的文件…',
+      onSelect: () => requestAsset({ mode: 'link', kind: 'file', at: null, afterId: null }),
+    },
+    {
+      label: '引用仓库里的图片…',
+      onSelect: () => requestAsset({ mode: 'link', kind: 'image', at: null, afterId: null }),
+    },
   ]
 
   const saveLink = (rel: { to: string; type: LinkType; label: string }) => {
-    const d = cur()
+    const d = docRef.current
     if (!d || !linkFrom) return
     const link: BoardLink = {
       id: `l-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
@@ -696,14 +729,6 @@ export function BoardEditor({
     commit(addLink(d, link))
     setLinkFrom(null)
     setShowLinks(true)
-  }
-
-  const scrollToBlock = (id: string) => {
-    const el = listRef.current?.querySelector(`[data-dd-board-block="${id}"]`) as HTMLElement | null
-    if (!el) return
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    setFlash(id)
-    window.setTimeout(() => setFlash((c) => (c === id ? null : c)), 1600)
   }
 
   /* ── 渲染 ── */
@@ -728,20 +753,43 @@ export function BoardEditor({
 
   if (!doc) return null
 
-  const activeId = hover ?? selected
   const linkCount = doc.links.length
-  const lastId = doc.layout.order.length ? (doc.layout.order[doc.layout.order.length - 1] ?? null) : null
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-paper" onKeyDown={onKeyDown}>
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
-        <span className="rounded-full bg-green-soft px-2 py-0.5 text-[10.5px] tracking-wide text-green">
-          .board · 白板
+    <div className="relative flex h-full min-h-0 flex-col bg-paper">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
+        <span
+          className="shrink-0 rounded-full bg-green-soft px-2 py-0.5 text-[10.5px] tracking-wide text-green"
+          title={doc.boardId}
+        >
+          .board · 画布
         </span>
+        <input
+          value={title}
+          onChange={(e) => {
+            const v = e.target.value
+            setTitle(v)
+            window.clearTimeout(titleTimer.current)
+            titleTimer.current = window.setTimeout(() => {
+              const d = docRef.current
+              if (!d) return
+              commit({ ...d, title: v }, 'title')
+            }, 400)
+          }}
+          onBlur={() => {
+            const d = docRef.current
+            if (!d) return
+            window.clearTimeout(titleTimer.current)
+            commit({ ...d, title: title.trim() || titleOfBoardPath(path) }, 'title')
+          }}
+          aria-label="白板标题"
+          placeholder="无标题白板"
+          className="h-7 min-w-0 max-w-[18rem] shrink rounded-md border border-transparent bg-transparent px-1.5 text-[13px] font-medium text-ink outline-none hover:border-line focus:border-green/45 focus:bg-surface"
+        />
         <span
           aria-live="polite"
           className={[
-            'text-[10.5px]',
+            'shrink-0 text-[10.5px]',
             status === 'error' ? 'text-[#8f1d17]' : status === 'saving' ? 'text-ink-2' : 'text-ink-3',
           ].join(' ')}
         >
@@ -780,19 +828,19 @@ export function BoardEditor({
           type="button"
           onClick={(e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            setAddMenu({ x: r.left, y: r.bottom + 4, afterId: null })
+            setAddMenu({ x: r.left, y: r.bottom + 4 })
           }}
-          className="inline-flex items-center gap-1 rounded-md bg-green px-2.5 py-1 text-[11.5px] text-white hover:bg-green-deep"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md bg-green px-2.5 py-1 text-[11.5px] text-white hover:bg-green-deep"
         >
           <Plus className="size-3.5" />
-          添加块
+          添加元素
         </button>
         <button
           type="button"
           onClick={() => setShowLinks((v) => !v)}
           aria-pressed={showLinks}
           className={[
-            'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11.5px]',
+            'inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11.5px]',
             showLinks
               ? 'border-green/40 bg-green-soft text-green'
               : 'border-line text-ink-2 hover:bg-surface-2',
@@ -804,200 +852,31 @@ export function BoardEditor({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <div
-          ref={scrollRef}
-          data-dd-board-scroll=""
-          className="min-h-0 flex-1 overflow-y-auto"
-          onDragOver={(e) => {
-            if (e.dataTransfer.types.includes('Files')) {
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'copy'
-              return
-            }
-            // 从左侧文件树拖进来的：落下来是"引用"，不是复制
-            if (e.dataTransfer.types.includes('text/plain')) {
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'link'
-            }
+        <BoardCanvas
+          ref={canvasRef}
+          doc={doc}
+          host={host}
+          selected={selected}
+          selectedLink={selectedLink}
+          focusId={focusId}
+          onSelect={(id) => {
+            setSelected(id)
+            if (id) setSelectedLink(null)
           }}
-          onDrop={(e) => {
-            if (e.dataTransfer.files.length > 0) {
-              e.preventDefault()
-              void onDropFiles([...e.dataTransfer.files], lastId)
-              return
-            }
-            const p = e.dataTransfer.getData('text/plain')
-            if (p) {
-              e.preventDefault()
-              referenceRepoPath(p, lastId)
-            }
-          }}
-        >
-          <div className="mx-auto w-full px-12 pt-8 pb-40" style={{ maxWidth: 'var(--dd-cw)' }}>
-            <input
-              value={title}
-              onChange={(e) => {
-                const v = e.target.value
-                setTitle(v)
-                window.clearTimeout(titleTimer.current)
-                titleTimer.current = window.setTimeout(() => {
-                  const d = docRef.current
-                  if (!d) return
-                  commit({ ...d, title: v }, 'title')
-                }, 400)
-              }}
-              onBlur={() => {
-                const d = docRef.current
-                if (!d) return
-                window.clearTimeout(titleTimer.current)
-                commit({ ...d, title: title.trim() || titleOfBoardPath(path) }, 'title')
-              }}
-              aria-label="白板标题"
-              placeholder="无标题白板"
-              className="dd-board-title"
-            />
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-[10.5px] text-ink-3">
-              <span>{doc.layout.order.length} 块</span>
-              <span className="opacity-50">·</span>
-              <span>{linkCount} 条连接</span>
-              <span className="opacity-50">·</span>
-              <span>拖动左侧手柄换顺序；Alt+↑/↓ 也可以</span>
-              <span className="opacity-50">·</span>
-              <span className="font-mono">{doc.boardId}</span>
-            </div>
-
-            {load.warnings.length > 0 && !hideWarnings ? (
-              <div role="status" className="mb-4 rounded-lg border border-[#f0e2c4] bg-[#fdf8ec] px-3 py-2">
-                <div className="flex items-start gap-2">
-                  <p className="min-w-0 flex-1 text-[11px] leading-relaxed break-words text-[#7a5b18]">
-                    {load.warnings.join('；')}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setHideWarnings(true)}
-                    aria-label="关闭提示"
-                    className="shrink-0 text-[12px] text-[#7a5b18]/70 hover:text-[#7a5b18]"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {doc.layout.mode === 'free' ? (
-              <p className="mb-4 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[11px] text-ink-2">
-                这块白板标记为自由排布（free）。自由画布视图还没做，先按纵向显示；坐标数据原样保留，不会丢。
-              </p>
-            ) : null}
-
-            {doc.layout.order.length === 0 ? (
-              <div className="mt-8 rounded-xl border border-dashed border-line px-6 py-12 text-center">
-                <p className="text-[14px] text-ink-2">这块白板还是空的</p>
-                <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
-                  块是独立的小卡片：文字、待办、引用、图片、文件都能单独放、单独拖，还能连起来。
-                </p>
-                <button
-                  type="button"
-                  onClick={() => addBlock('paragraph', null)}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-green px-3 py-1.5 text-[12px] text-white hover:bg-green-deep"
-                >
-                  <Plus className="size-3.5" />
-                  添加第一个块
-                </button>
-              </div>
-            ) : null}
-
-            {/* pl-10 = 左侧那条留白：连接线画在里面，拖动手柄也停在那儿，不压正文 */}
-            <div ref={listRef} className="relative flex flex-col gap-2 pl-10">
-              {lines.length > 0 ? (
-                <svg
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-                  data-dd-board-links
-                >
-                  {lines.map((l) => {
-                    const hot = activeId === l.from || activeId === l.to
-                    return (
-                      <path
-                        key={l.id}
-                        d={l.d}
-                        fill="none"
-                        stroke={hot ? 'var(--color-green)' : 'var(--color-ink-3)'}
-                        strokeWidth={hot ? 1.7 : 1.3}
-                        strokeOpacity={hot ? 0.95 : 0.5}
-                        strokeLinecap="round"
-                        data-link={l.id}
-                      />
-                    )
-                  })}
-                </svg>
-              ) : null}
-
-              {doc.layout.order.map((id, index) => {
-                const block = doc.blocks[id]
-                if (!block) return null
-                return (
-                  <Fragment key={id}>
-                    {dropAt && dropAt.index === index && !dropAt.after ? <DropLine /> : null}
-                    <BoardBlockCard
-                      host={host}
-                      block={block}
-                      index={index}
-                      autoFocus={focusId === id}
-                      selected={selected === id}
-                      flash={flash === id}
-                      linkCount={linksOf(doc, id).length}
-                      onChange={patchBlock}
-                      onMenu={(blockId, x, y) => setMenu({ id: blockId, x, y })}
-                      onSelect={setSelected}
-                      onHover={setHover}
-                      onEnterEnd={(blockId) => addBlock('paragraph', blockId)}
-                      onBackspaceEmpty={deleteBlock}
-                      onEditor={registerEditor}
-                      onDragStart={setDragId}
-                      onDragEnd={() => {
-                        setDragId(null)
-                        setDropAt(null)
-                      }}
-                      onDragOver={onCardDragOver}
-                      onDrop={handleDrop}
-                      onPickAsset={(blockId, kind, mode) =>
-                        requestAsset({ mode, kind, id: blockId, afterId: null })
-                      }
-                      onOpenFile={(p) => onOpenFile?.(p)}
-                      onShowLinks={() => setShowLinks(true)}
-                      onMove={moveBlock}
-                      onNotice={notify}
-                    />
-                    {dropAt && dropAt.index === index && dropAt.after ? <DropLine /> : null}
-                  </Fragment>
-                )
-              })}
-
-              <div
-                className="mt-1 flex h-16 items-center justify-center rounded-lg border border-dashed border-line/70 text-[11px] text-ink-3/60"
-                onDragOver={(e) => {
-                  if (!dragId) return
-                  e.preventDefault()
-                  setDropAt({ index: doc.layout.order.length, after: false })
-                }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  handleDrop()
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => addBlock('paragraph', lastId)}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-surface-2 hover:text-ink-2"
-                >
-                  <Plus className="size-3.5" />
-                  在末尾添加一个文字块
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          onSelectLink={setSelectedLink}
+          onMove={moveTo}
+          onChange={patchBlock}
+          onMenu={(id, x, y) => setMenu({ id, x, y })}
+          onDuplicate={duplicate}
+          onDelete={removeOne}
+          onConnect={(id) => setLinkFrom(id)}
+          onAdd={addAt}
+          onEditor={registerEditor}
+          onDropFiles={(files, at) => void dropFiles(files, at)}
+          onReferencePath={referencePath}
+          onOpenFile={(p) => onOpenFile?.(p)}
+          onNotice={notify}
+        />
 
         {showLinks ? (
           <aside
@@ -1020,8 +899,8 @@ export function BoardEditor({
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {doc.links.length === 0 ? (
                 <p className="px-2 py-6 text-center text-[11px] leading-relaxed text-ink-3">
-                  还没有连接。点任意块左侧 <span className="font-mono">⋯</span> → 「连接到…」，
-                  选目标块和关系类型。连好的两块之间会在左侧出现一条弧线。
+                  还没有连接。选中一块 → 工具条上的链接按钮，或者右键 →「连接到…」，
+                  选目标块和关系类型。连好的两块之间会出现一条曲线。
                 </p>
               ) : (
                 <ul className="flex flex-col gap-1">
@@ -1052,8 +931,8 @@ export function BoardEditor({
                         <button
                           type="button"
                           onClick={() => {
-                            if (to) scrollToBlock(link.to)
-                            else if (from) scrollToBlock(link.from)
+                            canvasRef.current?.centerOn(to ? link.to : link.from)
+                            setSelectedLink(link.id)
                           }}
                           className="mt-1 block w-full text-left text-[10.5px] leading-relaxed text-ink-2 hover:text-green"
                         >
@@ -1071,12 +950,31 @@ export function BoardEditor({
                 </ul>
               )}
               <p className="mt-2 px-2 text-[10px] leading-relaxed text-ink-3/70">
-                连接只表示块之间的关系，不会移动块，也不会改变顺序。
+                连接只表示块之间的关系，不会移动块。点一条可以把它的目标块在画布上居中。
               </p>
             </div>
           </aside>
         ) : null}
       </div>
+
+      {load.warnings.length > 0 && !hideWarnings ? (
+        <div
+          role="status"
+          className="flex shrink-0 items-start gap-2 border-t border-[#f0e2c4] bg-[#fdf8ec] px-3 py-1.5"
+        >
+          <p className="min-w-0 flex-1 text-[11px] leading-relaxed break-words text-[#7a5b18]">
+            {load.warnings.join('；')}
+          </p>
+          <button
+            type="button"
+            onClick={() => setHideWarnings(true)}
+            aria-label="关闭提示"
+            className="shrink-0 text-[12px] text-[#7a5b18]/70 hover:text-[#7a5b18]"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
 
       {error ? (
         <div role="alert" className="flex shrink-0 items-center gap-2 border-t border-[#f0c9c5] bg-[#fdf0ef] px-3 py-1.5">
@@ -1095,7 +993,7 @@ export function BoardEditor({
       ) : null}
 
       {notice ? (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 max-w-[min(520px,86vw)] -translate-x-1/2 rounded-lg border border-line bg-surface px-3 py-2 text-[11px] text-ink-2 shadow-[0_10px_28px_rgba(16,35,28,0.16)]">
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 max-w-[min(520px,86vw)] -translate-x-1/2 rounded-lg border border-line bg-surface px-3 py-2 text-[11px] text-ink-2 shadow-[0_10px_28px_rgba(16,35,28,0.16)]">
           {notice}
         </div>
       ) : null}
@@ -1105,12 +1003,7 @@ export function BoardEditor({
       ) : null}
 
       {addMenu ? (
-        <ContextMenu
-          x={addMenu.x}
-          y={addMenu.y}
-          items={addMenuItems(addMenu.afterId)}
-          onClose={() => setAddMenu(null)}
-        />
+        <ContextMenu x={addMenu.x} y={addMenu.y} items={addMenuItems()} onClose={() => setAddMenu(null)} />
       ) : null}
 
       {linkFrom ? (
@@ -1142,8 +1035,4 @@ export function BoardEditor({
       />
     </div>
   )
-}
-
-function DropLine() {
-  return <div className="dd-board-drop" aria-hidden />
 }
