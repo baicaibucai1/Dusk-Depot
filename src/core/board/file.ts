@@ -58,6 +58,8 @@ export type BoardBlockType =
   | 'image'
   | 'file'
   | 'divider'
+  /** 组合：把若干块框在一个范围里，框上可以有个标题。子块坐标仍是绝对的 */
+  | 'group'
   | 'unknown'
 
 /** 图片 / 文件块：是复制进白板，还是只引用仓库里已有的那个文件 */
@@ -84,6 +86,12 @@ export type BoardBlock = {
   size?: number
   /** 图片 alt */
   alt?: string
+  /** 文字类块的字号（px）。不写 = 用界面默认 */
+  fontSize?: number
+  /** 组框上的标题 */
+  title?: string
+  /** 组里装了哪些块（id）。块本身还在顶层，组只是把它们框起来 */
+  children?: string[]
   /** 图片来源：copy = 复制进 `.dusk/board/<id>/`；link = 只记路径 */
   source?: BlockSource
   /** 认不出的块：原始 JSON，保存时原样写回 */
@@ -138,8 +146,13 @@ export type BoardLink = {
   extra?: Record<string, unknown>
 }
 
-/** 自由画布上的一个位置：左上角坐标 + 卡片宽度（高度由内容决定，量出来的不算进模型） */
-export type Pos = { x: number; y: number; w?: number }
+/**
+ * 自由画布上的一个位置：左上角坐标 + 尺寸。
+ *
+ * `w` / `h` 都是可选的：不写就是"按内容来"（宽度按块类型的默认值，高度量出来）。
+ * 一旦用户拖过手柄，就把那个方向固定下来 —— 文字多了也不会把卡片撑变形。
+ */
+export type Pos = { x: number; y: number; w?: number; h?: number }
 
 /**
  * 布局：`free` = 无限画布（默认），`stack` = 旧版纵向堆叠。
@@ -224,17 +237,34 @@ const KNOWN_BLOCK_FIELDS = new Set([
   'size',
   'alt',
   'source',
+  'fontSize',
+  'title',
+  'children',
 ])
 
 const TEXT_TYPES = new Set(['paragraph', 'heading1', 'heading2', 'todo', 'quote'])
 
 /** 一个块的 JSON → BoardBlock。结构不对的**已知类型**降级成 unknown（raw 留着），不静默变空段 */
+/** 字号只收一个合理区间：太大一张卡吃掉整屏，太小看不清 */
+export const MIN_FONT = 11
+export const MAX_FONT = 72
+
+function fontSizeOf(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined
+  if (v < MIN_FONT || v > MAX_FONT) return undefined
+  return Math.round(v)
+}
+
 export function parseBlock(id: string, raw: unknown): BoardBlock {
   const obj = asObject(raw) ?? {}
   const type = typeof obj.type === 'string' ? obj.type : ''
 
   const known =
-    TEXT_TYPES.has(type) || type === 'image' || type === 'file' || type === 'divider'
+    TEXT_TYPES.has(type) ||
+    type === 'image' ||
+    type === 'file' ||
+    type === 'divider' ||
+    type === 'group'
 
   if (!known) return { id, type: 'unknown', raw: { ...obj, id } }
 
@@ -249,6 +279,15 @@ export function parseBlock(id: string, raw: unknown): BoardBlock {
     if (!content) return { id, type: 'unknown', raw: { ...obj, id } }
     block.content = content
     if (type === 'todo') block.checked = Boolean(obj.checked)
+    block.fontSize = fontSizeOf(obj.fontSize)
+    return block
+  }
+
+  if (type === 'group') {
+    block.title = typeof obj.title === 'string' ? obj.title : '分组'
+    block.children = Array.isArray(obj.children)
+      ? obj.children.filter((x): x is string => typeof x === 'string')
+      : []
     return block
   }
 
@@ -285,7 +324,11 @@ function posOfRaw(raw: unknown): { pos?: Record<string, Pos> } {
     const y = typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : null
     if (x === null || y === null) continue
     const w = typeof p.w === 'number' && Number.isFinite(p.w) && p.w > 0 ? p.w : undefined
-    pos[id] = w ? { x, y, w } : { x, y }
+    const h = typeof p.h === 'number' && Number.isFinite(p.h) && p.h > 0 ? p.h : undefined
+    const at: Pos = { x, y }
+    if (w) at.w = w
+    if (h) at.h = h
+    pos[id] = at
   }
   return Object.keys(pos).length > 0 ? { pos } : {}
 }
@@ -489,10 +532,16 @@ function serializeBlock(block: BoardBlock): Record<string, unknown> {
     case 'heading2':
     case 'quote':
       out.content = block.content ?? []
+      if (block.fontSize) out.fontSize = block.fontSize
       break
     case 'todo':
       out.checked = Boolean(block.checked)
       out.content = block.content ?? []
+      if (block.fontSize) out.fontSize = block.fontSize
+      break
+    case 'group':
+      out.title = block.title ?? '分组'
+      out.children = block.children ?? []
       break
     case 'image':
       out.src = block.src ?? ''
@@ -583,6 +632,8 @@ export function newBlock(type: BoardBlockType, id: string): BoardBlock {
       return { id, type, src: '', name: '', source: 'copy' }
     case 'divider':
       return { id, type }
+    case 'group':
+      return { id, type, title: '分组', children: [] }
     case 'unknown':
       return { id, type: 'unknown', raw: { id, type: 'unknown' } }
     default:
@@ -722,6 +773,8 @@ export const CARD_W: Record<BoardBlockType, number> = {
   todo: 320,
   image: 380,
   file: 360,
+  // 组框不按这个宽度画（它跟着子块的包围盒走），这里只是让表是完整的
+  group: 420,
   divider: 260,
   unknown: 320,
 }
@@ -739,16 +792,35 @@ export function setPos(doc: BoardFileDoc, id: string, pos: Pos): BoardFileDoc {
   if (!doc.blocks[id]) return doc
   const cur = doc.layout.pos?.[id]
   const w = pos.w ?? cur?.w
+  const h = pos.h ?? cur?.h
   const next: Pos = {
     x: Math.round(pos.x),
     y: Math.round(pos.y),
     ...(w && Number.isFinite(w) ? { w: Math.round(w) } : {}),
+    ...(h && Number.isFinite(h) ? { h: Math.round(h) } : {}),
   }
-  if (cur && cur.x === next.x && cur.y === next.y && cur.w === next.w) return doc
+  if (
+    cur &&
+    cur.x === next.x &&
+    cur.y === next.y &&
+    cur.w === next.w &&
+    cur.h === next.h
+  ) {
+    return doc
+  }
   return {
     ...doc,
     layout: { ...doc.layout, mode: 'free', pos: { ...(doc.layout.pos ?? {}), [id]: next } },
   }
+}
+
+/** 把高度放回"按内容来"：双击下边缘手柄就是这个意思 */
+export function clearHeight(doc: BoardFileDoc, id: string): BoardFileDoc {
+  const cur = doc.layout.pos?.[id]
+  if (!cur || cur.h === undefined) return doc
+  const next: Pos = { x: cur.x, y: cur.y }
+  if (cur.w) next.w = cur.w
+  return { ...doc, layout: { ...doc.layout, pos: { ...(doc.layout.pos ?? {}), [id]: next } } }
 }
 
 /**

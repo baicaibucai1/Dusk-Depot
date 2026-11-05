@@ -15,13 +15,24 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef } from 'react'
-import type { BoardBlock } from '../../core/note/board'
 import { type Inline, inlineNodes, inlineOf } from '../../core/note/flow'
 import type { PmDoc, PmNode } from '../../core/note/pm'
 import { BubbleBar } from './BubbleBar'
 
+/**
+ * 只要求"长得像一块可编辑文本"。
+ * 不写死成 `.note` 的 BoardBlock —— `.board` 那边的块类型更宽（多了 group 等），
+ * 绑死会让两个模块的类型互相打架。
+ */
+export type TextBlock = {
+  id: string
+  type: string
+  content?: Inline[]
+  checked?: boolean
+}
+
 type Props = {
-  block: BoardBlock
+  block: TextBlock
   autoFocus?: boolean
   onChange: (content: Inline[]) => void
   onEnterEnd: () => void
@@ -29,7 +40,7 @@ type Props = {
   onEditor: (id: string, editor: Editor | null) => void
 }
 
-function initialDoc(block: BoardBlock): PmDoc {
+function initialDoc(block: TextBlock): PmDoc {
   const inline = inlineNodes(block.content ?? [])
   if (block.type === 'heading1' || block.type === 'heading2') {
     return {

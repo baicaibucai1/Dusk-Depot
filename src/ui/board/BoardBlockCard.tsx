@@ -11,9 +11,10 @@
  */
 import type { Editor } from '@tiptap/core'
 import { Copy, FileText, Image as ImageIcon, Link2, RotateCw } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { BoardBlock, BlockSource } from '../../core/board/file'
 import { kindOf } from '../../core/model/fileKind'
+import { decodeBytes } from '../../core/model/text'
 import type { Inline } from '../../core/note/flow'
 import type { Host } from '../../core/ports/host'
 import { useAssetExists, useAssetUrl } from '../assetUrl'
@@ -246,7 +247,9 @@ function FileBody({
     }
   }
 
-  const openable = Boolean(block.src) && kindOf(block.src ?? '') !== 'unknown'
+  const kind = block.src ? kindOf(block.src) : 'unknown'
+  const openable = Boolean(block.src) && kind !== 'unknown'
+  const preview = useTextPreview(host, block.src, kind)
 
   return (
     <div className="flex flex-col gap-2">
@@ -269,9 +272,10 @@ function FileBody({
           type="button"
           onClick={() => (openable ? onOpen() : void download())}
           disabled={busy || !block.src}
+          title={openable ? '在文件区打开（双击卡片也行）' : '这是二进制文件，点了直接下载'}
           className="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-ink-2 hover:bg-surface-2 disabled:opacity-50"
         >
-          {!block.src ? '选择文件' : busy ? '读取中…' : '打开'}
+          {!block.src ? '选择文件' : busy ? '读取中…' : openable ? '打开' : '下载'}
         </button>
         {block.src ? (
           <button
@@ -283,6 +287,20 @@ function FileBody({
           </button>
         ) : null}
       </div>
+      {preview ? (
+        <div
+          data-dd-file-preview
+          className="overflow-hidden rounded-lg border border-line/70 bg-surface-2/60 px-2.5 py-2"
+        >
+          <pre className="m-0 max-h-[120px] overflow-hidden font-mono text-[10.5px] leading-[1.7] whitespace-pre-wrap text-ink-2">
+            {preview.text}
+            {preview.more ? '…' : ''}
+          </pre>
+        </div>
+      ) : null}
+      {block.src && kind === 'pdf' ? (
+        <p className="text-[10.5px] text-ink-3">PDF 文档 · 双击卡片在文件区打开</p>
+      ) : null}
       {block.src ? (
         <button
           type="button"
@@ -312,4 +330,43 @@ export function formatSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+/**
+ * 纯文本类文件读个开头当预览。
+ *
+ * 只对"确定是文字"的类型读：PDF/压缩包读出来是乱码，不如不读。
+ * 上限 600 字，够看清这是什么文件，又不会把一张卡片撑爆。
+ */
+const PREVIEW_KINDS = new Set(['md', 'text', 'code', 'sheet'])
+
+function useTextPreview(
+  host: Host,
+  src: string | undefined,
+  kind: string,
+): { text: string; more: boolean } | null {
+  const [preview, setPreview] = useState<{ text: string; more: boolean } | null>(null)
+  useEffect(() => {
+    if (!src || !PREVIEW_KINDS.has(kind)) {
+      setPreview(null)
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const bytes = await host.read(src)
+        if (!alive) return
+        const full = decodeBytes(bytes)
+        const text = full.slice(0, 600).trimEnd()
+        setPreview({ text, more: full.length > 600 })
+      } catch {
+        // 读不出来就不预览 —— 卡面上还有名字和"失效"提示，不影响别的
+        if (alive) setPreview(null)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [host, src, kind])
+  return preview
 }

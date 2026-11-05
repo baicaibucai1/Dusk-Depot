@@ -30,6 +30,8 @@ import {
   LINK_TYPES,
   addLink,
   blockLabel,
+  blockText,
+  clearHeight,
   copyAssetPath,
   copyDirOf,
   defaultWidth,
@@ -96,13 +98,20 @@ type AssetAsk = {
 
 const ADD_TYPES: { type: BoardBlockType; label: string }[] = [
   { type: 'paragraph', label: '文字' },
-  { type: 'heading1', label: '标题' },
-  { type: 'heading2', label: '小标题' },
   { type: 'todo', label: '待办' },
   { type: 'quote', label: '引用' },
   { type: 'image', label: '图片（复制进来）' },
   { type: 'file', label: '文件（复制进来）' },
   { type: 'divider', label: '分隔线' },
+]
+
+/** 能调字号的块：图片、文件、分隔线不算文字 */
+const FONT_TYPES = new Set(['paragraph', 'heading1', 'heading2', 'todo', 'quote'])
+const FONT_STEPS: { size: number; label: string }[] = [
+  { size: 14, label: '小' },
+  { size: 16, label: '默认' },
+  { size: 20, label: '大' },
+  { size: 26, label: '特大' },
 ]
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -138,6 +147,8 @@ export function BoardEditor({
   /** 「点谁连谁」的源块 */
   const [linkPick, setLinkPick] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  /** 多选（框选 / Shift 点）。"组合"就是把这一批框起来 */
+  const [multi, setMulti] = useState<string[]>([])
   const [selectedLink, setSelectedLink] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [hideWarnings, setHideWarnings] = useState(false)
@@ -184,6 +195,7 @@ export function BoardEditor({
     setError(null)
     setHideWarnings(false)
     setSelected(null)
+    setMulti([])
     setSelectedLink(null)
     setActiveId(null)
     setLinkPick(null)
@@ -399,10 +411,80 @@ export function BoardEditor({
     commit(updateBlock(d, id, patch), key)
   }
 
-  const moveTo = (id: string, pos: { x: number; y: number; w?: number }) => {
+  const moveTo = (id: string, pos: { x: number; y: number; w?: number; h?: number }) => {
     const d = docRef.current
     if (!d) return
     commit(setPos(d, id, pos))
+  }
+
+  /** 拖组标题：这一批块整体平移，落一次盘 */
+  const moveMany = (ids: string[], dx: number, dy: number) => {
+    const d = docRef.current
+    if (!d) return
+    let next = d
+    for (const id of ids) {
+      const at = layoutOf(next)[id]
+      if (!at) continue
+      next = setPos(next, id, { ...at, x: at.x + dx, y: at.y + dy })
+    }
+    if (next !== d) commit(next)
+  }
+
+  /**
+   * 组合：把多选中的块框成一组。
+   *
+   * 组只是一条"框"的记录 —— 子块的坐标还是它们自己的，组框每次按包围盒重算。
+   * 这样拖动组里任意一块，框自己会长大；删掉组只删框，块都留着。
+   */
+  const combine = () => {
+    const d = docRef.current
+    if (!d) return
+    const members = multi.filter((id) => d.blocks[id] && d.blocks[id].type !== 'group')
+    if (members.length < 2) {
+      notify('先框选（或按住 Shift 点）两块以上，再组合')
+      return
+    }
+    const firstId = members[0]
+    const first = firstId ? d.blocks[firstId] : undefined
+    const raw = first ? blockText(first) : ''
+    const title = raw ? [...raw].slice(0, 12).join('') : `分组 ${d.layout.order.length}`
+    const id = nextBlockId(d)
+    const group = { ...newBlock('group', id), title, children: members }
+    commit(insertBlock(d, null, group))
+    setMulti([])
+    setSelected(null)
+    notify(`已把 ${members.length} 块收进「${title}」；拖标题可以整组移动`)
+  }
+
+  /** 双击组标题条：就地改这个范围的标题 */
+  const renameGroup = (id: string, title: string) => {
+    const d = docRef.current
+    if (!d || d.blocks[id]?.type !== 'group') return
+    const clean = title.trim() || '分组'
+    if (d.blocks[id].title === clean) return
+    commit(updateBlock(d, id, { title: clean }))
+  }
+
+  /** 解散：只删那条框，块本身一个不动 */
+  const ungroup = (id: string) => {
+    const d = docRef.current
+    if (!d || d.blocks[id]?.type !== 'group') return
+    commit(removeBlock(d, id))
+    setMulti([])
+    notify('已解散这个组合（块都还在）')
+  }
+
+  /** 双击下边缘：高度放回"按内容来" */
+  const autoHeight = (id: string) => {
+    const d = docRef.current
+    if (!d) return
+    const next = clearHeight(d, id)
+    if (next === d) {
+      notify('这块的高度本来就跟着内容走')
+      return
+    }
+    commit(next)
+    notify('高度改回跟着内容走')
   }
 
   const removeOne = (id: string) => {
@@ -686,10 +768,20 @@ export function BoardEditor({
     const d = docRef.current
     const block = d?.blocks[id]
     if (!d || !block) return []
+    if (block.type === 'group') {
+      return [
+        { label: '解散这个组合', onSelect: () => ungroup(id) },
+        { divider: true, label: '', onSelect: () => {} },
+        { label: '删除这个组合（块都留着）', danger: true, onSelect: () => ungroup(id) },
+      ]
+    }
     const items: MenuItem[] = [
       { label: '复制这个块', onSelect: () => duplicate(id) },
       { label: '连接到…', onSelect: () => setLinkFrom(id) },
     ]
+    if (multi.includes(id) && multi.length >= 2) {
+      items.push({ label: `把这 ${multi.length} 块组合起来`, onSelect: () => combine() })
+    }
     if (block.type === 'image' || block.type === 'file') {
       const kind = block.type
       const what = kind === 'image' ? '图片' : '文件'
@@ -704,6 +796,17 @@ export function BoardEditor({
           onSelect: () => requestAsset({ mode: 'link', kind, id, at: null, afterId: null }),
         },
       )
+    }
+    // 字号：只对文字类块有意义，图片/文件/分隔线不掺和
+    if (FONT_TYPES.has(block.type)) {
+      const cur = block.fontSize ?? 16
+      items.push({ divider: true, label: '', onSelect: () => {} })
+      for (const f of FONT_STEPS) {
+        items.push({
+          label: `字号 ${f.label}${f.size === cur ? ' ✓' : ''}`,
+          onSelect: () => patchBlock(id, { fontSize: f.size }),
+        })
+      }
     }
     items.push({ divider: true, label: '', onSelect: () => {} })
     items.push({ label: '删除这个块', danger: true, onSelect: () => removeOne(id) })
@@ -931,6 +1034,17 @@ export function BoardEditor({
         </span>
         <span className="flex-1" />
 
+        {multi.length >= 2 ? (
+          <button
+            type="button"
+            onClick={combine}
+            data-dd-combine
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-green/40 bg-green-soft px-2 py-1 text-[11.5px] text-green hover:bg-green/15"
+          >
+            组合 {multi.length} 块
+          </button>
+        ) : null}
+
         <button
           type="button"
           onClick={undo}
@@ -985,6 +1099,7 @@ export function BoardEditor({
           doc={doc}
           host={host}
           selected={selected}
+          multi={multi}
           selectedLink={selectedLink}
           focusId={focusId}
           active={activeId}
@@ -997,6 +1112,10 @@ export function BoardEditor({
           onActivate={activate}
           onPickTarget={pickTarget}
           onMove={moveTo}
+          onMulti={setMulti}
+          onMoveMany={moveMany}
+          onRenameGroup={renameGroup}
+          onAutoHeight={autoHeight}
           onChange={patchBlock}
           onMenu={(id, x, y) => setMenu({ id, x, y })}
           onDuplicate={duplicate}

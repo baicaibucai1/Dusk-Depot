@@ -50,6 +50,14 @@ type Rect = { x: number; y: number; w: number; h: number }
 
 const MIN_Z = 0.25
 const MAX_Z = 2.5
+/** 卡片尺寸的上下限（世界坐标）：太小抓不住，太大一张卡吃掉整块视野 */
+const MIN_W = 120
+const MAX_W = 1600
+const MIN_H = 44
+const MAX_H = 1600
+
+/** 手柄方向：右边缘调宽、下边缘调高、右下角一起 */
+type ResizeDir = 'w' | 'h' | 'both'
 const FIT_PAD = 80
 /** 新块离已有块的最小间距（找空位时往外蹭的步子） */
 const NUDGE = 28
@@ -70,6 +78,8 @@ type Props = {
   doc: BoardFileDoc
   host: Host
   selected: string | null
+  /** 多选中的块（框选或 Shift+点）。"组合"用这一组 */
+  multi: string[]
   selectedLink: string | null
   focusId: string | null
   /** 当前"活"着的那一块（内容能点、能编辑）；null = 全都只是卡片 */
@@ -79,6 +89,12 @@ type Props = {
   /** 哪些块还在等图片/文件读完（不影响布局，只影响卡片内容） */
   onSelect: (id: string | null) => void
   onSelectLink: (id: string | null) => void
+  /** 框选/Shift 点：整组换掉 */
+  onMulti: (ids: string[]) => void
+  /** 拖动组标题：把这一批块整体平移 (dx, dy)，松手才落盘 */
+  onMoveMany: (ids: string[], dx: number, dy: number) => void
+  /** 改组框上的标题 */
+  onRenameGroup: (id: string, title: string) => void
   onActivate: (id: string | null) => void
   /** 「点谁连谁」：选目标块；null = 取消。sides 是两端该从哪条边出/入 */
   onPickTarget: (
@@ -86,6 +102,8 @@ type Props = {
     sides?: { from: AnchorSide; to: AnchorSide | null },
   ) => void
   onMove: (id: string, pos: Pos) => void
+  /** 高度回到"跟着内容走"（双击下边缘手柄） */
+  onAutoHeight: (id: string) => void
   onChange: (id: string, patch: Partial<BoardBlock>) => void
   onMenu: (id: string, x: number, y: number) => void
   onDuplicate: (id: string) => void
@@ -114,27 +132,32 @@ const LINK_LABEL = Object.fromEntries(LINK_TYPES.map((t) => [t.id, t.label])) as
  *
  * 这是刻意的：卡片内部整块都是"按住拖动"，锚点只要压到边上（哪怕只压 1px），
  * 拖卡片时就会误拉出一条线来 —— 两个手势抢同一块像素，怎么调都别扭。
- * 放到外面 6px 的空气里（12px 的圆点占 18~6px），命中区物理上不重叠，
+ * 放到外面 2px 的空气里（12px 的圆点占 2~14px），命中区物理上不重叠，
  * 就不存在"点错了"这回事。
+ *
+ * 命中**不跟 hover 走**：指针在卡片外的圆点上时，卡片其实已经不 hover 了。
+ * 若再让 hover 决定 pointer-events，就会"一靠近就消失、永远点不到"。
+ * hover 只决定看不看得见。
  */
 const PORT_POS: Record<AnchorSide, string> = {
-  top: 'left-1/2 -top-[18px] -translate-x-1/2',
-  bottom: 'left-1/2 -bottom-[18px] -translate-x-1/2',
-  left: 'top-1/2 -left-[18px] -translate-y-1/2',
-  right: 'top-1/2 -right-[18px] -translate-y-1/2',
+  top: 'left-1/2 -top-[14px] -translate-x-1/2',
+  bottom: 'left-1/2 -bottom-[14px] -translate-x-1/2',
+  left: 'top-1/2 -left-[14px] -translate-y-1/2',
+  right: 'top-1/2 -right-[14px] -translate-y-1/2',
 }
 
 /**
  * 锚点到卡片边的那 6px 小竖线（/ 小横线）。
  * 没有它，圆点飘在点阵背景里就像一颗背景点，看不出它属于哪张卡。
+ * 它**不吃指针**：这条 6px 的线会伸到卡片边上，挡住"调宽/调高"手柄的端头。
  */
 const PORT_TICK: Record<AnchorSide, string> = {
-  top: "after:absolute after:top-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
+  top: "after:pointer-events-none after:absolute after:top-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
   bottom:
-    "after:absolute after:bottom-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
-  left: "after:absolute after:left-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
+    "after:pointer-events-none after:absolute after:bottom-full after:left-1/2 after:h-1.5 after:w-px after:-translate-x-1/2 after:bg-ink-3/35 after:content-['']",
+  left: "after:pointer-events-none after:absolute after:left-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
   right:
-    "after:absolute after:right-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
+    "after:pointer-events-none after:absolute after:right-full after:top-1/2 after:h-px after:w-1.5 after:-translate-y-1/2 after:bg-ink-3/35 after:content-['']",
 }
 
 const SIDE_LABEL: Record<AnchorSide, string> = {
@@ -165,7 +188,7 @@ function loadView(boardId: string): Viewport | null {
 
 const rectOf = (pos: Pos | undefined, size: Size | undefined): Rect | null => {
   if (!pos) return null
-  return { x: pos.x, y: pos.y, w: pos.w ?? size?.w ?? 320, h: size?.h ?? 120 }
+  return { x: pos.x, y: pos.y, w: pos.w ?? size?.w ?? 320, h: pos.h ?? size?.h ?? 120 }
 }
 
 const overlaps = (a: Rect, b: Rect) =>
@@ -268,7 +291,7 @@ function loosePort(at: { x: number; y: number }, from: Port): Port {
 }
 
 export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(props, ref) {
-  const { doc, host, selected, selectedLink, focusId, active, linkPick } = props
+  const { doc, host, selected, multi, selectedLink, focusId, active, linkPick } = props
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState<Viewport>(() => loadView(doc.boardId) ?? { x: 160, y: 120, z: 1 })
@@ -278,7 +301,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   const [size, setSize] = useState<Size>({ w: 1200, h: 800 })
   const [sizes, setSizes] = useState<Record<string, Size>>({})
   const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null)
-  const [resizing, setResizing] = useState<{ id: string; w: number } | null>(null)
+  const [resizing, setResizing] = useState<{ id: string; w?: number; h?: number } | null>(null)
   const [panning, setPanning] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
   const [hoverLink, setHoverLink] = useState<string | null>(null)
@@ -292,6 +315,19 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   } | null>(null)
   /** 「点谁连谁」：线头此刻跟着鼠标的位置（世界坐标） */
   const [pickAt, setPickAt] = useState<{ x: number; y: number } | null>(null)
+  /** 连接线上一次按下的时刻：双击在这里自己数，不指望浏览器合成 dblclick */
+  const lastLinkTap = useRef<{ id: string; t: number } | null>(null)
+  /** 框选：视口坐标（相对画布左上角）的一个矩形 */
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(
+    null,
+  )
+  /** 正在拖某个组：成员按 (dx,dy) 整体偏移，松手才写盘 */
+  const [groupDrag, setGroupDrag] = useState<{ ids: string[]; dx: number; dy: number } | null>(null)
+  /** 就地改组标题：双击组标题条就进这个状态 */
+  const [editingGroup, setEditingGroup] = useState<{ id: string; value: string } | null>(null)
+  const lastGroupTap = useRef<{ id: string; t: number } | null>(null)
+  /** 标题输入框真的获得过焦点吗：没聚焦过的 blur 是"刚挂载就被鼠标抢焦点"，别当成提交 */
+  const groupInputFocused = useRef(false)
   /** 最后一次指针位置。点完按钮鼠标还没动时，预览线要从这儿长出来，不能是空的 */
   const lastPointer = useRef<{ x: number; y: number } | null>(null)
   const fitted = useRef<string | null>(null)
@@ -302,7 +338,15 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     (id: string): Pos => {
       if (drag?.id === id) return drag.pos
       const base = layout[id] ?? { x: 0, y: 0 }
-      if (resizing?.id === id) return { ...base, w: resizing.w }
+      if (groupDrag?.ids.includes(id)) {
+        return { ...base, x: Math.round(base.x + groupDrag.dx), y: Math.round(base.y + groupDrag.dy) }
+      }
+      if (resizing?.id === id) {
+        const live: Pos = { ...base }
+        if (resizing.w !== undefined) live.w = resizing.w
+        if (resizing.h !== undefined) live.h = resizing.h
+        return live
+      }
       return base
     },
     [drag, layout, resizing],
@@ -310,7 +354,10 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
 
   const rects = useMemo(() => {
     const out: Record<string, Rect> = {}
-    for (const id of doc.layout.order) if (doc.blocks[id]) {
+    for (const id of doc.layout.order) {
+      const b = doc.blocks[id]
+      // 组不参与坐标：它的框是拿子块的包围盒算出来的
+      if (!b || b.type === 'group') continue
       const r = rectOf(posNow(id), sizes[id])
       if (r) out[id] = r
     }
@@ -547,6 +594,72 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     window.addEventListener('pointerup', up)
   }
 
+  /**
+   * 框选：空白处按下拖出一个框，松手把「框里的块」整批选中。
+   * 平移改走中键 / 空格 / 滚轮 —— 框选是组合的前提，得占住左下角这条最顺的手势。
+   */
+  const beginMarquee = (e: React.PointerEvent) => {
+    const box = viewportRef.current?.getBoundingClientRect()
+    if (!box) return
+    const x0 = e.clientX - box.left
+    const y0 = e.clientY - box.top
+    setMarquee({ x0, y0, x1: x0, y1: y0 })
+    let moved = false
+    const move = (ev: PointerEvent) => {
+      const x1 = ev.clientX - box.left
+      const y1 = ev.clientY - box.top
+      if (!moved && Math.abs(x1 - x0) + Math.abs(y1 - y0) < 4) return
+      moved = true
+      setMarquee({ x0, y0, x1, y1 })
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setMarquee(null)
+      if (!moved) return
+      const v = viewRef.current
+      const x1 = ev.clientX - box.left
+      const y1 = ev.clientY - box.top
+      const wx = (Math.min(x0, x1) - v.x) / v.z
+      const wy = (Math.min(y0, y1) - v.y) / v.z
+      const ww = Math.abs(x1 - x0) / v.z
+      const wh = Math.abs(y1 - y0) / v.z
+      const hit = Object.entries(rectsRef.current)
+        .filter(([, r]) => r.x < wx + ww && r.x + r.w > wx && r.y < wy + wh && r.y + r.h > wy)
+        .map(([id]) => id)
+      props.onMulti(hit)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  /** 拖组标题：整组一起走，松手才落一次盘 */
+  const beginGroupDrag = (e: React.PointerEvent, ids: string[]) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const z = view.z
+    const start = { x: e.clientX, y: e.clientY }
+    let last = { dx: 0, dy: 0 }
+    document.body.style.userSelect = 'none'
+    const move = (ev: PointerEvent) => {
+      last = {
+        dx: Math.round((ev.clientX - start.x) / z),
+        dy: Math.round((ev.clientY - start.y) / z),
+      }
+      setGroupDrag({ ids, ...last })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.style.userSelect = ''
+      setGroupDrag(null)
+      if (last.dx || last.dy) props.onMoveMany(ids, last.dx, last.dy)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   const beginDrag = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return
     const base = layout[id]
@@ -578,28 +691,50 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     window.addEventListener('pointerup', up)
   }
 
-  const beginResize = (e: React.PointerEvent, id: string) => {
+  /**
+   * 拖手柄改尺寸。`dir` 决定这次动哪几个方向：
+   * 右边缘只改宽、下边缘只改高、右下角两个一起。
+   *
+   * 只改一个方向时**不写另一个方向** —— 没碰过高度就该继续跟着内容长，
+   * 不能因为调了个宽度就把它钉死。
+   */
+  const beginResize = (e: React.PointerEvent, id: string, dir: ResizeDir) => {
     if (e.button !== 0) return
     const base = layout[id]
     if (!base) return
-    e.preventDefault()
+    /*
+     * 这里**不能** preventDefault：它会把 mousedown 一起掐掉，浏览器也就不再合成 click，
+     * 下边缘手柄的"双击回自动高度"就永远等不到事件。拖拽时选字由 userSelect 兜住。
+     */
     e.stopPropagation()
     props.onSelect(id)
     const z = view.z
     const startX = e.clientX
-    const startW = base.w ?? sizes[id]?.w ?? defaultWidth(doc.blocks[id]?.type ?? 'paragraph')
-    let last = startW
+    const startY = e.clientY
+    const curW = base.w ?? sizes[id]?.w ?? defaultWidth(doc.blocks[id]?.type ?? 'paragraph')
+    // 没固定过高度就以"现在量出来的"为起点，拖一下才写进文件
+    const curH = base.h ?? sizes[id]?.h ?? 120
+    let w = curW
+    let h = curH
     document.body.style.userSelect = 'none'
     const move = (ev: PointerEvent) => {
-      last = Math.round(clamp(startW + (ev.clientX - startX) / z, 200, 760))
-      setResizing({ id, w: last })
+      if (dir !== 'h') w = Math.round(clamp(curW + (ev.clientX - startX) / z, MIN_W, MAX_W))
+      if (dir !== 'w') h = Math.round(clamp(curH + (ev.clientY - startY) / z, MIN_H, MAX_H))
+      setResizing({
+        id,
+        ...(dir !== 'h' ? { w } : {}),
+        ...(dir !== 'w' ? { h } : {}),
+      })
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       document.body.style.userSelect = ''
       setResizing(null)
-      if (last !== startW) props.onMove(id, { ...base, w: last })
+      const next: Pos = { ...base }
+      if (dir !== 'h' && w !== curW) next.w = w
+      if (dir !== 'w' && h !== curH) next.h = h
+      if (next.w !== base.w || next.h !== base.h) props.onMove(id, next)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -715,6 +850,33 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   const selRect = selected ? rects[selected] : null
   const hoverHot = hoverLink ?? selectedLink
 
+  /* 组框：子块包围盒 + 内边距，顶上留一条标题的位置 */
+  const groupBoxes = doc.layout.order
+    .map((id) => ({ id, block: doc.blocks[id] }))
+    .filter((x) => x.block?.type === 'group')
+    .map(({ id, block }) => {
+      if (!block) return null
+      const kids = (block.children ?? []).filter((c) => Boolean(rects[c]))
+      const rs = kids.map((c) => rects[c]).filter((r): r is Rect => Boolean(r))
+      if (rs.length === 0) return null
+      const pad = 18
+      const head = 26
+      const x = Math.min(...rs.map((r) => r.x)) - pad
+      const y = Math.min(...rs.map((r) => r.y)) - pad - head
+      const right = Math.max(...rs.map((r) => r.x + r.w)) + pad
+      const bottom = Math.max(...rs.map((r) => r.y + r.h)) + pad
+      return {
+        id,
+        title: block.title ?? '分组',
+        members: kids,
+        x,
+        y,
+        w: right - x,
+        h: bottom - y,
+      }
+    })
+    .filter((x): x is NonNullable<typeof x> => Boolean(x))
+
   /* 拖线中的预览：起点是按下那个锚点，终点吸附到目标边或跟着光标 */
   const wireFrom = wire ? rects[wire.from] : null
   const wireStart = wire && wireFrom ? portOf(wireFrom, wire.side) : null
@@ -783,7 +945,13 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
           props.onSelect(null)
           props.onSelectLink(null)
           props.onActivate(null)
-          beginPan(e)
+          props.onMulti([])
+          // 平移还给中键和空格；左键拖空白改成框选
+          if (spaceDown || e.button === 1) {
+            beginPan(e)
+            return
+          }
+          if (e.button === 0) beginMarquee(e)
         }}
         onDoubleClick={(e) => {
           const el = e.target as HTMLElement
@@ -821,6 +989,93 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
           className="absolute top-0 left-0 origin-top-left"
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
         >
+          {/*
+            组框：z-30 画在卡片**上面**。不是为了让框盖住卡片，而是标题条必须点得到 ——
+            有块飘到框顶那片区域时，画在下层的话双击改名永远命中卡片。
+            底色因此压得很淡；整个框除了标题条都不吃指针。
+          */}
+          {groupBoxes.map((g) => (
+            <div
+              key={g.id}
+              data-dd-group={g.id}
+              className="pointer-events-none absolute z-30 rounded-2xl border border-dashed border-line bg-surface/15"
+              style={{ left: g.x, top: g.y, width: g.w, height: g.h }}
+            >
+              <div className="absolute inset-x-0 top-0 flex h-[26px] items-center px-2.5">
+                <span className="truncate text-[11px] font-medium text-ink-3">{g.title}</span>
+                <span className="ml-1.5 shrink-0 text-[9px] text-ink-3/50">双击改名</span>
+              </div>
+              {/* 抓这条把整组拎走；双击它改成重命名 */}
+              <button
+                type="button"
+                data-dd-group-grip={g.id}
+                title={`拖动「${g.title}」整组移动；双击改标题`}
+                onPointerDown={(e) => {
+                  const now = Date.now()
+                  const last = lastGroupTap.current
+                  if (last && last.id === g.id && now - last.t < 350) {
+                    lastGroupTap.current = null
+                    setEditingGroup({ id: g.id, value: g.title })
+                    return
+                  }
+                  lastGroupTap.current = { id: g.id, t: now }
+                  beginGroupDrag(e, g.members)
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  props.onMenu(g.id, e.clientX, e.clientY)
+                }}
+                className="pointer-events-auto absolute inset-x-0 top-0 h-[26px] cursor-grab rounded-t-2xl hover:bg-line/25 active:cursor-grabbing"
+              />
+              {/* 改名按钮放在标题条右端，压在抓手上面：双击是快捷方式，这个按钮是明路 */}
+              <button
+                type="button"
+                data-dd-group-rename={g.id}
+                title="给这个范围改个标题"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setEditingGroup({ id: g.id, value: g.title })
+                }}
+                className="pointer-events-auto absolute top-1 right-1 z-10 grid size-4 place-items-center rounded text-ink-3/60 hover:bg-line/50 hover:text-ink"
+              >
+                <Pencil className="size-2.5" />
+              </button>
+              {editingGroup?.id === g.id ? (
+                <input
+                  data-dd-group-title-input
+                  autoFocus
+                  value={editingGroup.value}
+                  onChange={(e) => setEditingGroup({ id: g.id, value: e.target.value })}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onFocus={() => {
+                    groupInputFocused.current = true
+                  }}
+                  onBlur={() => {
+                    if (!groupInputFocused.current) return
+                    groupInputFocused.current = false
+                    props.onRenameGroup(g.id, editingGroup.value)
+                    setEditingGroup(null)
+                  }}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Escape') {
+                      setEditingGroup(null)
+                      return
+                    }
+                    if (e.key === 'Enter') {
+                      props.onRenameGroup(g.id, editingGroup.value)
+                      setEditingGroup(null)
+                    }
+                  }}
+                  className="pointer-events-auto absolute inset-x-1 top-0.5 z-10 h-[22px] rounded border border-green/50 bg-surface px-1.5 text-[11px] text-ink outline-none"
+                  aria-label="组合标题"
+                />
+              ) : null}
+            </div>
+          ))}
+
           <svg
             aria-hidden
             data-dd-board-links
@@ -847,13 +1102,21 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                     className="pointer-events-auto cursor-pointer"
                     onPointerDown={(e) => {
                       e.stopPropagation()
+                      /*
+                       * 双击断开自己数时间。原来用 onDoubleClick，但这套 pointerdown 里
+                       * stopPropagation / 选中后的重渲染会让浏览器合成不出 dblclick，
+                       * 用户看到的就是"双击了没反应"。
+                       */
+                      const now = Date.now()
+                      const last = lastLinkTap.current
+                      if (last && last.id === l.id && now - last.t < 350) {
+                        lastLinkTap.current = null
+                        props.onDeleteLink(l.id)
+                        return
+                      }
+                      lastLinkTap.current = { id: l.id, t: now }
                       props.onSelect(null)
                       props.onSelectLink(l.id)
-                    }}
-                    // 端点常常压在卡片边上、被卡片盖住，所以线本身也给一条双击断开的入口
-                    onDoubleClick={(e) => {
-                      e.stopPropagation()
-                      props.onDeleteLink(l.id)
                     }}
                     onPointerEnter={() => setHoverLink(l.id)}
                     onPointerLeave={() => setHoverLink((cur) => (cur === l.id ? null : cur))}
@@ -933,7 +1196,9 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
 
           {doc.layout.order.map((id) => {
             const block = doc.blocks[id]
-            if (!block) return null
+            // 组不是一张卡片：它只由上面的 groupBoxes 画成一条框。
+            // 不跳过的话，它会以默认坐标浮出来一张空卡，正好压住自己的标题条。
+            if (!block || block.type === 'group') return null
             const p = posNow(id)
             return (
               <CanvasCard
@@ -941,7 +1206,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                 host={host}
                 block={block}
                 pos={p}
-                selected={selected === id}
+                selected={selected === id || multi.includes(id)}
                 active={active === id}
                 linkPick={Boolean(linkPick)}
                 hot={wire?.over === id}
@@ -949,6 +1214,10 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                 dragging={drag?.id === id}
                 resizing={resizing?.id === id}
                 onSelect={props.onSelect}
+                onToggleMulti={(bid) => {
+                  const next = multi.includes(bid) ? multi.filter((x) => x !== bid) : [...multi, bid]
+                  props.onMulti(next)
+                }}
                 onActivate={(bid) => props.onActivate(bid)}
                 onPickTarget={(bid) => {
                   const src = linkPick ? rects[linkPick] : null
@@ -965,6 +1234,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                 }}
                 onBeginDrag={beginDrag}
                 onBeginResize={beginResize}
+                onAutoHeight={props.onAutoHeight}
                 onBeginWire={beginWire}
                 onChange={props.onChange}
                 onMenu={props.onMenu}
@@ -1041,6 +1311,20 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
             </svg>
           ) : null}
         </div>
+
+        {/* 框选：拖出来的那个半透明框（屏幕坐标，不跟世界缩放） */}
+        {marquee ? (
+          <div
+            data-dd-marquee
+            className="pointer-events-none absolute z-40 rounded-sm border border-green/60 bg-green/10"
+            style={{
+              left: Math.min(marquee.x0, marquee.x1),
+              top: Math.min(marquee.y0, marquee.y1),
+              width: Math.abs(marquee.x1 - marquee.x0),
+              height: Math.abs(marquee.y1 - marquee.y0),
+            }}
+          />
+        ) : null}
 
         {/* 选中连接的小工具条：贴在曲线中点上方 */}
         {selLink && selLinkMid ? (
@@ -1210,10 +1494,13 @@ type CardProps = {
   dragging: boolean
   resizing: boolean
   onSelect: (id: string) => void
+  onToggleMulti: (id: string) => void
   onActivate: (id: string) => void
   onPickTarget: (id: string) => void
   onBeginDrag: (e: React.PointerEvent, id: string) => void
-  onBeginResize: (e: React.PointerEvent, id: string) => void
+  onBeginResize: (e: React.PointerEvent, id: string, dir: ResizeDir) => void
+  /** 双击下边缘：高度放回"跟着内容走" */
+  onAutoHeight: (id: string) => void
   onBeginWire: (e: React.PointerEvent, id: string, side: AnchorSide) => void
   onChange: (id: string, patch: Partial<BoardBlock>) => void
   onMenu: (id: string, x: number, y: number) => void
@@ -1229,6 +1516,8 @@ function CanvasCard(props: CardProps) {
   const { block, pos, selected, hot, dragging, resizing } = props
   const ref = useRef<HTMLDivElement | null>(null)
   const { onSize } = props
+  /** 下边缘手柄上一次按下的时刻：双击在这里自己数，不指望浏览器合成 click */
+  const lastHeightTap = useRef(0)
 
   useEffect(() => {
     const el = ref.current
@@ -1254,10 +1543,11 @@ function CanvasCard(props: CardProps) {
         'dd-board-card group absolute rounded-xl',
         dragging
           ? 'z-30 cursor-grabbing'
-          : props.active
-            ? 'cursor-default'
-            : props.linkPick
-              ? 'cursor-crosshair'
+          : props.linkPick
+            ? 'z-10 cursor-crosshair'
+            : // 选中/激活的置顶：不然它的尺寸手柄会被旁边压上来的卡片盖住，点不到
+              selected || props.active
+              ? 'z-20 cursor-default'
               : 'cursor-grab',
         bare ? '' : 'bg-surface',
         hot
@@ -1276,8 +1566,21 @@ function CanvasCard(props: CardProps) {
             ? 'shadow-[0_12px_32px_rgba(16,35,28,0.16)]'
             : 'shadow-[0_1px_2px_rgba(16,35,28,0.05)]',
       ].join(' ')}
-      style={{ left: pos.x, top: pos.y, width: pos.w ?? 320 }}
+      style={{
+        left: pos.x,
+        top: pos.y,
+        width: pos.w ?? 320,
+        // 只有被手动固定过高度才写死；否则让内容自己撑
+        ...(pos.h ? { height: pos.h } : {}),
+      }}
       onPointerDown={(e) => {
+        // Shift + 点 = 加/减选，用于组合
+        if (e.shiftKey && !props.linkPick) {
+          e.preventDefault()
+          e.stopPropagation()
+          props.onToggleMulti(block.id)
+          return
+        }
         // 「点谁连谁」模式：按下哪块就连哪块，不当拖动
         if (props.linkPick) {
           e.preventDefault()
@@ -1301,6 +1604,11 @@ function CanvasCard(props: CardProps) {
       onDoubleClick={(e) => {
         // 双击 = 让这块"活过来"；别冒泡给画布（画布的双击是新建一块）
         e.stopPropagation()
+        // 文件块的双击就是"打开这个文件" —— 卡片里已经能看到内容了，再点一次打开
+        if (block.type === 'file' && block.src) {
+          props.onOpenFile(block.src)
+          return
+        }
         props.onActivate(block.id)
       }}
       onContextMenu={(e) => {
@@ -1311,9 +1619,16 @@ function CanvasCard(props: CardProps) {
       {/* 未激活时整层不接指针：这是"整块都能拖"的前提 */}
       <div
         data-dd-card-body
+        style={
+          block.fontSize
+            ? ({ ['--dd-block-fs' as string]: `${block.fontSize}px` } as React.CSSProperties)
+            : undefined
+        }
         className={[
           bare ? 'px-2 py-1' : 'px-4 py-3',
           props.active ? '' : 'pointer-events-none select-none',
+          // 固定了高度就得给内容一个出口：活着的时候能滚，没激活时裁整齐
+          pos.h ? (props.active ? 'h-full overflow-auto' : 'h-full overflow-hidden') : '',
         ].join(' ')}
       >
         <BoardBlockBody
@@ -1349,8 +1664,6 @@ function CanvasCard(props: CardProps) {
             'absolute z-10 size-3 cursor-crosshair rounded-full border-[1.5px] border-ink-3/70 bg-surface',
             // 纸色外圈：把圆点从点阵背景里"抠"出来，不然会跟背景点混在一起
             'ring-2 ring-paper shadow-[0_1px_3px_rgba(16,35,28,0.18)]',
-            // 视觉 10px，手上 18px。别扩到贴住卡片边：那样"点边缘"又变成拉线了
-            "before:absolute before:-inset-1 before:content-['']",
             PORT_TICK[side],
             'transition-[transform,opacity,background-color,border-color] duration-100',
             'hover:scale-150 hover:border-green hover:bg-green',
@@ -1359,8 +1672,7 @@ function CanvasCard(props: CardProps) {
               ? 'pointer-events-none opacity-0'
               : selected
                 ? 'opacity-100'
-                : // 藏着的时候别吃指针：不然点卡片边上那圈空气会莫名拉出一条线
-                  'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100',
+                : 'opacity-0 group-hover:opacity-100',
           ].join(' ')}
         />
       ))}
@@ -1376,25 +1688,64 @@ function CanvasCard(props: CardProps) {
         title="按住拖动这块"
         onPointerDown={(e) => props.onBeginDrag(e, block.id)}
         className={[
-          'absolute inset-x-1 top-0 z-10 h-2.5 rounded-t-xl transition-colors',
+          // 只占中间一段：右边还要留给"调宽"手柄，整条铺满会抢同一块像素
+          'absolute top-0 left-1/2 z-10 h-2.5 w-16 -translate-x-1/2 rounded-b transition-colors',
           props.active
             ? 'cursor-grab hover:bg-line/60 active:cursor-grabbing'
             : 'pointer-events-none',
         ].join(' ')}
       />
 
-      {/* 调宽：只改宽度，高度跟着内容走。放右下角，和右边中点的连接锚点错开 */}
+      {/*
+        三个改尺寸的手柄。**都放在卡片内侧**（连接锚点在外侧 6px 起），
+        所以"贴着边拖 = 改尺寸"、"边外那圈点 = 连线"，两边不用抢。
+        右边缘调宽、下边缘调高、右下角两个一起；双击下边缘回到"跟着内容长"。
+      */}
       <span
         aria-hidden
         data-dd-no-drag
+        data-dd-resize="w"
         title="拖动调整宽度"
+        onPointerDown={(e) => props.onBeginResize(e, block.id, 'w')}
         className={[
-          'absolute -right-1.5 -bottom-1.5 size-3 cursor-ew-resize rounded-full border transition-colors',
+          'absolute top-3 right-0 bottom-3 w-1.5 cursor-ew-resize rounded-l',
+          resizing ? 'bg-green/60' : 'bg-transparent group-hover:bg-line/70',
+        ].join(' ')}
+      />
+      <span
+        aria-hidden
+        data-dd-no-drag
+        data-dd-resize="h"
+        title="拖动调整高度（双击回到跟着内容）"
+        onPointerDown={(e) => {
+          const now = Date.now()
+          if (now - lastHeightTap.current < 350) {
+            lastHeightTap.current = 0
+            e.preventDefault()
+            e.stopPropagation()
+            props.onAutoHeight(block.id)
+            return
+          }
+          lastHeightTap.current = now
+          props.onBeginResize(e, block.id, 'h')
+        }}
+        className={[
+          'absolute right-3 bottom-0 left-3 h-1.5 cursor-ns-resize rounded-t',
+          resizing ? 'bg-green/60' : 'bg-transparent group-hover:bg-line/70',
+        ].join(' ')}
+      />
+      <span
+        aria-hidden
+        data-dd-no-drag
+        data-dd-resize="both"
+        title="拖动同时改宽高"
+        onPointerDown={(e) => props.onBeginResize(e, block.id, 'both')}
+        className={[
+          'absolute -right-1 -bottom-1 size-3 cursor-nwse-resize rounded-full border transition-colors',
           resizing
             ? 'border-green bg-green'
             : 'border-line bg-surface opacity-0 group-hover:opacity-100',
         ].join(' ')}
-        onPointerDown={(e) => props.onBeginResize(e, block.id)}
       />
     </div>
   )

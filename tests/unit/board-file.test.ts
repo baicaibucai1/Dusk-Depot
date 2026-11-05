@@ -19,6 +19,7 @@ import {
   nextBlockId,
   parseBoardFile,
   posOf,
+  clearHeight,
   removeBlock,
   removeLink,
   reverseLink,
@@ -453,6 +454,44 @@ describe('.board 画布：自由坐标', () => {
     expect(posOf(dup.doc, dup.id)).toEqual({ x: 128, y: 128, w: 320 })
   })
 
+  it('高度也能存、能清：拖过下边缘就固定，双击回"跟着内容走"', () => {
+    let doc = insertBlock(newBoardFile('t'), null, newBlock('paragraph', 'n1'))
+    doc = setPos(doc, 'n1', { x: 10, y: 20, w: 400 })
+    expect(posOf(doc, 'n1')).toEqual({ x: 10, y: 20, w: 400 })
+
+    const fixed = setPos(doc, 'n1', { x: 10, y: 20, h: 260 })
+    expect(posOf(fixed, 'n1')).toEqual({ x: 10, y: 20, w: 400, h: 260 })
+
+    // 只挪位置：宽高都该原样留着
+    const moved = setPos(fixed, 'n1', { x: 90, y: 90 })
+    expect(posOf(moved, 'n1')).toEqual({ x: 90, y: 90, w: 400, h: 260 })
+
+    const auto = clearHeight(moved, 'n1')
+    expect(posOf(auto, 'n1')).toEqual({ x: 90, y: 90, w: 400 })
+    // 已经是自动高度了就原样返回（不制造假改动）
+    expect(clearHeight(auto, 'n1')).toBe(auto)
+
+    const parsed = parseBoardFile(serializeBoardFile(fixed))
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    expect(parsed.doc.layout.pos).toEqual({ n1: { x: 10, y: 20, w: 400, h: 260 } })
+  })
+
+  it('高度写坏了只丢这个字段，坐标留着', () => {
+    const text = JSON.stringify({
+      app: 'dusk-depot',
+      format: 'board',
+      version: 1,
+      boardId: 'bd-y',
+      title: 't',
+      layout: { mode: 'free', order: ['a'], pos: { a: { x: 5, y: 6, w: 300, h: -3 } } },
+      blocks: { a: { id: 'a', type: 'paragraph', content: [] } },
+      links: [],
+    })
+    const parsed = parseBoardFile(text)
+    if (parsed.kind !== 'ok') throw new Error('parse failed')
+    expect(parsed.doc.layout.pos).toEqual({ a: { x: 5, y: 6, w: 300 } })
+  })
+
   it('坐标和宽度能原样往返', () => {
     let doc = insertBlock(newBoardFile('t'), null, newBlock('image', 'n1'))
     doc = setPos(doc, 'n1', { x: -40, y: 88, w: 512 })
@@ -556,5 +595,94 @@ describe('连接：锚边、改、反向', () => {
     expect(l1?.to).toBe('n1')
     expect(l1?.fromSide).toBeUndefined()
     expect(l1?.toSide).toBeUndefined()
+  })
+})
+
+describe('组块与字号', () => {
+  /** 绕开 parse 直接从原始 JSON 读，才能测"写坏了会怎样" */
+  const rawDoc = (blocks: Record<string, unknown>) =>
+    JSON.stringify({
+      app: 'dusk-depot',
+      format: 'board',
+      version: 1,
+      boardId: 'bd-g',
+      title: 't',
+      layout: { mode: 'free', order: Object.keys(blocks), pos: {} },
+      blocks,
+      links: [],
+    })
+
+  const parse = (text: string): BoardFileDoc => {
+    const r = parseBoardFile(text)
+    if (r.kind !== 'ok') throw new Error(`parse failed: ${JSON.stringify(r)}`)
+    return r.doc
+  }
+
+  it('group 的标题与成员能原样往返', () => {
+    const fresh = newBlock('group', 'g1')
+    expect(fresh.title).toBe('分组')
+    expect(fresh.children).toEqual([])
+
+    let doc = newBoardFile('t')
+    doc = insertBlock(doc, null, { ...fresh, title: '第一章', children: ['n1', 'n2'] })
+    const back = parse(serializeBoardFile(doc))
+    expect(back.blocks.g1?.type).toBe('group')
+    expect(back.blocks.g1?.title).toBe('第一章')
+    expect(back.blocks.g1?.children).toEqual(['n1', 'n2'])
+  })
+
+  it('group 的 title / children 写坏了给兜底，不整块降级成 unknown', () => {
+    const doc = parse(
+      rawDoc({ g1: { id: 'g1', type: 'group', title: 3, children: ['a', 7, null, 'b'] } }),
+    )
+    const g = doc.blocks.g1
+    expect(g?.type).toBe('group')
+    expect(g?.title).toBe('分组')
+    expect(g?.children).toEqual(['a', 'b'])
+  })
+
+  it('group 的未知字段原样保留（组合以后加属性也不会丢）', () => {
+    const doc = parse(
+      rawDoc({ g1: { id: 'g1', type: 'group', title: 't', children: [], collapsed: true } }),
+    )
+    expect(doc.blocks.g1?.extra).toEqual({ collapsed: true })
+    expect(serializeBoardFile(doc)).toContain('"collapsed": true')
+  })
+
+  it('字号能原样往返，且只属于这一块', () => {
+    let doc = newBoardFile('t')
+    doc = insertBlock(doc, null, newBlock('paragraph', 'n1'))
+    doc = insertBlock(doc, 'n1', newBlock('paragraph', 'n2'))
+    doc = updateBlock(doc, 'n1', { fontSize: 26 })
+    const back = parse(serializeBoardFile(doc))
+    expect(back.blocks.n1?.fontSize).toBe(26)
+    expect(back.blocks.n2?.fontSize).toBeUndefined()
+    expect(back.links).toEqual(doc.links)
+    expect(back.layout).toEqual(doc.layout)
+  })
+
+  it('字号越界 / 不是数字时只丢这个字段，文字块照常能读', () => {
+    const doc = parse(
+      rawDoc({
+        a: { id: 'a', type: 'paragraph', content: [{ type: 'text', text: '甲' }], fontSize: 999 },
+        b: { id: 'b', type: 'quote', content: [{ type: 'text', text: '乙' }], fontSize: '大' },
+        c: { id: 'c', type: 'todo', content: [], checked: false, fontSize: 20 },
+      }),
+    )
+    expect(doc.blocks.a?.fontSize).toBeUndefined()
+    expect(doc.blocks.b?.fontSize).toBeUndefined()
+    expect(doc.blocks.c?.fontSize).toBe(20)
+    expect(Object.keys(doc.blocks)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('组合只是一条框记录：子块仍在顶层，删掉组不动它们', () => {
+    let doc = newBoardFile('t')
+    doc = insertBlock(doc, null, newBlock('paragraph', 'n1'))
+    doc = insertBlock(doc, 'n1', newBlock('paragraph', 'n2'))
+    doc = insertBlock(doc, 'n2', { ...newBlock('group', 'g1'), children: ['n1', 'n2'] })
+    const after = removeBlock(doc, 'g1')
+    expect(after.blocks.g1).toBeUndefined()
+    expect(Object.keys(after.blocks).sort()).toEqual(['n1', 'n2'])
+    expect(after.layout.order).toEqual(['n1', 'n2'])
   })
 })

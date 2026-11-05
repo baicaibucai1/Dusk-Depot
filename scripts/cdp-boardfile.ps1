@@ -80,6 +80,18 @@ function MoveTo([string]$pt) {
   [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = [double]$p[0]; y = [double]$p[1]; buttons = 0 })
   Start-Sleep -Milliseconds 140
 }
+# 中键拖动 = 平移画布（左键拖空白改成框选了）
+function DragMiddle([double]$x1, [double]$y1, [double]$x2, [double]$y2) {
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = $x1; y = $y1; button = 'middle'; clickCount = 1; buttons = 4 })
+  Start-Sleep -Milliseconds 70
+  for ($i = 1; $i -le 6; $i++) {
+    $x = $x1 + ($x2 - $x1) * $i / 6
+    $y = $y1 + ($y2 - $y1) * $i / 6
+    [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseMoved'; x = $x; y = $y; button = 'middle'; buttons = 4 })
+    Start-Sleep -Milliseconds 25
+  }
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = $x2; y = $y2; button = 'middle'; clickCount = 1; buttons = 0 })
+}
 function DragTo([double]$x1, [double]$y1, [double]$x2, [double]$y2) {
   [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = $x1; y = $y1; button = 'left'; clickCount = 1; buttons = 1 })
   Start-Sleep -Milliseconds 70
@@ -230,10 +242,10 @@ Write-Host 'B2. 平移 / 缩放'
 $tf0 = Eval 'document.querySelector("[data-dd-board-canvas] > div")?.style.transform ?? ""'
 $panFrom = Eval '(() => { const r = document.querySelector("[data-dd-board-canvas]").getBoundingClientRect(); return [r.right - 120, r.bottom - 220].map(Math.round).join(",") })()'
 $p = $panFrom.Split(',')
-DragTo ([double]$p[0]) ([double]$p[1]) ([double]$p[0] - 90) ([double]$p[1] - 60)
+DragMiddle ([double]$p[0]) ([double]$p[1]) ([double]$p[0] - 90) ([double]$p[1] - 60)
 Start-Sleep -Milliseconds 300
 $tf1 = Eval 'document.querySelector("[data-dd-board-canvas] > div")?.style.transform ?? ""'
-Check '拖空白处能平移画布' ($tf1 -ne $tf0) "before=$tf0 after=$tf1"
+Check '中键拖空白能平移画布' ($tf1 -ne $tf0) "before=$tf0 after=$tf1"
 $z0 = Eval 'document.querySelector("[data-dd-zoom]")?.innerText.match(/(\d+)%/)?.[1] ?? ""'
 [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseWheel'; x = 700; y = 400; deltaX = 0; deltaY = -240; modifiers = 2 })
 Start-Sleep -Milliseconds 400
@@ -349,9 +361,57 @@ if ($rh -ne '') {
   DragTo ([double]$r[0]) ([double]$r[1]) ([double]$r[0] + 70) ([double]$r[1])
   Start-Sleep -Milliseconds 1000
   $w1 = [int](Eval "$BOARD.layout.pos.n2.w")
-  Check '拖右边缘能改宽度' ($w1 -gt $w0 + 40) "before=$w0 after=$w1"
+  Check '拖右边缘能改宽度' ($w1 -gt $w0 + 40) "before=$w0 after=$w1 pt=$rh"
 } else {
   Check '拖右边缘能改宽度' $false 'no handle'
+}
+
+Write-Host 'F1b. 尺寸：下边缘调高、双击回自动、右下角同时改'
+$h0 = Eval "$BOARD.layout.pos.n2.h ?? 'none'"
+Check '一开始高度跟着内容（文件里没有 h）' ($h0 -eq 'none') "h=$h0"
+$boxH0 = [int](Eval '(() => { const el = document.querySelector("[data-dd-card=\"n2\"]"); return el ? Math.round(el.getBoundingClientRect().height) : -1 })()')
+$hh = BoxOf '[data-dd-card="n2"] [data-dd-resize="h"]'
+if ($hh -ne '') {
+  $hp = $hh.Split(',')
+  DragTo ([double]$hp[0]) ([double]$hp[1]) ([double]$hp[0]) ([double]$hp[1] + 70)
+  Start-Sleep -Milliseconds 900
+  $h1 = [int](Eval "$BOARD.layout.pos.n2.h ?? 0")
+  Check '拖下边缘把高度写进了文件' ($h1 -gt 0) "h=$h1"
+  $boxH1 = [int](Eval '(() => { const el = document.querySelector("[data-dd-card=\"n2\"]"); return el ? Math.round(el.getBoundingClientRect().height) : -1 })()')
+  Check '卡片真的变高了' ($boxH1 -gt $boxH0 + 30) "before=$boxH0 after=$boxH1"
+  Check '只调高不会顺手改宽度' ((Eval "$BOARD.layout.pos.n2.w") -eq $w1) ""
+
+  # 双击下边缘 → 高度回到"跟着内容走"
+  $hh2 = BoxOf '[data-dd-card="n2"] [data-dd-resize="h"]'
+  $h2p = $hh2.Split(',')
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$h2p[0]; y = [double]$h2p[1]; button = 'left'; clickCount = 1; buttons = 1 })
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$h2p[0]; y = [double]$h2p[1]; button = 'left'; clickCount = 1; buttons = 0 })
+  Start-Sleep -Milliseconds 70
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$h2p[0]; y = [double]$h2p[1]; button = 'left'; clickCount = 2; buttons = 1 })
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$h2p[0]; y = [double]$h2p[1]; button = 'left'; clickCount = 2; buttons = 0 })
+  Start-Sleep -Milliseconds 800
+  Check '双击下边缘把高度放回自动' ((Eval "$BOARD.layout.pos.n2.h ?? 'none'") -eq 'none') "h=$(Eval "$BOARD.layout.pos.n2.h ?? 'x'") pt=$hh2"
+  $boxH2 = [int](Eval '(() => { const el = document.querySelector("[data-dd-card=\"n2\"]"); return el ? Math.round(el.getBoundingClientRect().height) : -1 })()')
+  Check '卡片高度跟着内容缩回去了' ($boxH2 -lt $boxH1 - 20) "after=$boxH2 (was $boxH1)"
+
+  # 右下角：两个方向一起
+  $w2 = [int](Eval "$BOARD.layout.pos.n2.w")
+  $bh = BoxOf '[data-dd-card="n2"] [data-dd-resize="both"]'
+  $bhp = $bh.Split(',')
+  DragTo ([double]$bhp[0]) ([double]$bhp[1]) ([double]$bhp[0] + 50) ([double]$bhp[1] + 45)
+  Start-Sleep -Milliseconds 900
+  $w3 = [int](Eval "$BOARD.layout.pos.n2.w")
+  $h3 = [int](Eval "$BOARD.layout.pos.n2.h ?? 0")
+  Check '右下角一次改宽高两个方向' (($w3 -gt $w2 + 25) -and ($h3 -gt 0)) "w=$w2->$w3 h=$h3"
+  Check '改完是已保存' ((Eval 'document.querySelector("header span[aria-live]")?.textContent') -eq '已保存') ''
+} else {
+  Check '拖下边缘把高度写进了文件' $false 'no handle'
+  Check '卡片真的变高了' $false 'no handle'
+  Check '只调高不会顺手改宽度' $false 'no handle'
+  Check '双击下边缘把高度放回自动' $false 'no handle'
+  Check '卡片高度跟着内容缩回去了' $false 'no handle'
+  Check '右下角一次改宽高两个方向' $false 'no handle'
+  Check '改完是已保存' $false 'no handle'
 }
 Shot 'canvas-moved'
 
@@ -366,9 +426,9 @@ if ($cbox -ne '') {
   $opGrip = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [data-dd-card-grip]"); return el ? String(getComputedStyle(el).opacity) : "-1" })()'
   $opResize = Eval '(() => { const el = document.querySelector("[data-dd-card=\"n1\"] [title=\"拖动调整宽度\"]"); return el ? String(getComputedStyle(el).opacity) : "-1" })()'
   Check '拖动握把和调宽手柄也一起出来' (([double]$opGrip -gt 0.5) -and ([double]$opResize -gt 0.5)) "grip=$opGrip resize=$opResize"
-  $shapes = Eval '(() => { const card = document.querySelector("[data-dd-card=\"n1\"]"); const items = [...card.querySelectorAll("[data-dd-port], [data-dd-card-grip], [title=\"拖动调整宽度\"]")]; return JSON.stringify(items.map((el) => { const r = el.getBoundingClientRect(); return { k: el.dataset.ddPort || el.getAttribute("title"), x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } })) })()'
+  $shapes = Eval '(() => { const card = document.querySelector("[data-dd-card=\"n1\"]"); const items = [...card.querySelectorAll("[data-dd-port], [data-dd-card-grip], [data-dd-resize]")]; return JSON.stringify(items.map((el) => { const r = el.getBoundingClientRect(); return { k: el.dataset.ddPort || el.dataset.ddResize || el.getAttribute("title"), x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } })) })()'
   $list = $shapes | ConvertFrom-Json
-  Check '四个锚点 + 两个手柄都在' ($list.Count -eq 6) "n=$($list.Count)"
+  Check '四个锚点 + 拖动条 + 三个尺寸手柄都在' ($list.Count -eq 8) "n=$($list.Count)"
   $clash = @()
   for ($i = 0; $i -lt $list.Count; $i++) {
     for ($j = $i + 1; $j -lt $list.Count; $j++) {
@@ -378,7 +438,7 @@ if ($cbox -ne '') {
       }
     }
   }
-  Check '锚点和手柄互不重叠（不然会抢鼠标）' ($clash.Count -eq 0) "clash=$($clash -join ',')"
+  Check '锚点和尺寸手柄互不重叠（内改尺寸、外连线）' ($clash.Count -eq 0) "clash=$($clash -join ',')"
   Shot 'canvas-hover-ports'
 } else {
   Check '悬停后锚点可见（不是藏着摸不到）' $false 'no card'
@@ -465,6 +525,10 @@ if ($gripPt -ne '') {
 Start-Sleep -Milliseconds 300
 
 Write-Host 'G0. 直接拖线：从卡片边上的圆点拖到另一块就建连接'
+# 前面几轮改过尺寸和位置，卡片可能被推到可视区外（被右栏裁掉）——
+# 先把视图缩放到能看见全部，再按坐标操作。这不影响被测行为。
+Key '0' 'Digit0' 48 2
+Start-Sleep -Milliseconds 550
 HoverCard 'n2'
 $linksBefore = [int](Eval "$BOARD.links.length")
 $portCount = Num 'document.querySelectorAll("[data-dd-card] [data-dd-port]").length'
@@ -594,14 +658,16 @@ Check '点空白取消，不会偷偷建连接' ([int](Eval "$BOARD.links.length
 Check '取消后连线预览也没了' ((Num 'document.querySelectorAll("[data-dd-board-pick]").length') -eq 0) ''
 
 Write-Host 'G1b. 双击连接：断开这一条（线端圆点被卡片盖住时点线也行）'
+Key '0' 'Digit0' 48 2
+Start-Sleep -Milliseconds 500
 # 连接面板会把画布挤窄，线可能被挤到面板底下 —— 先收起来再点
 if ((Num 'document.querySelectorAll("[data-dd-board-link-row]").length') -gt 0) {
   [void](Eval '(() => { const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim().startsWith("连接 ")); if (b) b.click(); return true })()')
   Start-Sleep -Milliseconds 450
 }
 $endBefore = [int](Eval "$BOARD.links.length")
-$endPt = Eval '(() => { const g = document.querySelector("[data-dd-board-link]"); if (!g) return ""; const p = g.querySelector("path"); const pt = p.getPointAtLength(p.getTotalLength() / 2); const m = p.getScreenCTM(); return Math.round(m.a * pt.x + m.c * pt.y + m.e) + "," + Math.round(m.b * pt.x + m.d * pt.y + m.f) })()'
-Check '拿得到连接线上的点' ($endPt -ne '') "pt=$endPt"
+$endPt = Eval "(() => { for (const g of document.querySelectorAll('[data-dd-board-link]')) { const p = g.querySelector('path'); if (!p) continue; const L = p.getTotalLength(); for (const f of [0.3, 0.7, 0.2, 0.8, 0.4, 0.6, 0.5]) { const pt = p.getPointAtLength(L * f); const m = p.getScreenCTM(); const x = m.a * pt.x + m.c * pt.y + m.e, y = m.b * pt.x + m.d * pt.y + m.f; const under = document.elementFromPoint(x, y); if (under && under.closest('[data-dd-board-link]')) return Math.round(x) + ',' + Math.round(y) } } return '' })()"
+Check '找得到一条露在外面、点得到的线' ($endPt -ne '') "pt=$endPt"
 if ($endPt -ne '') {
   $epp = $endPt.Split(',')
   [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$epp[0]; y = [double]$epp[1]; button = 'left'; clickCount = 1; buttons = 1 })
@@ -750,6 +816,142 @@ Check '画布还在（没有被挤没）' ((Num 'document.querySelectorAll("[dat
 Shot 'canvas-1024'
 [void](Send-Cdp 'Emulation.setDeviceMetricsOverride' @{ width = 1440; height = 900; deviceScaleFactor = 1; mobile = $false })
 Start-Sleep -Milliseconds 500
+
+
+$NEWBOARD = 'JSON.parse(window.__files["白板/空板.board"].text)'
+
+Write-Host 'S. 添加元素菜单：标题模块已去掉'
+[void](Eval '(() => { const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "添加元素"); if (b) b.click(); return true })()')
+Start-Sleep -Milliseconds 380
+$menuTexts = Eval '[...document.querySelectorAll("[role=menuitem]")].map((x) => (x.textContent || "").trim()).join("|")'
+Check '菜单里不再有「标题」「小标题」' (-not [bool]("$menuTexts" -match '标题')) "menu=$menuTexts"
+Check '文字 / 待办 / 引用都还在' ([bool]("$menuTexts" -match '文字') -and [bool]("$menuTexts" -match '待办') -and [bool]("$menuTexts" -match '引用')) "menu=$menuTexts"
+Check '点「文字」加第一块' (MenuItem '文字') ''
+Start-Sleep -Milliseconds 950
+[void](Eval '(() => { const b = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "添加元素"); if (b) b.click(); return true })()')
+Start-Sleep -Milliseconds 380
+Check '再加一块文字' (MenuItem '文字') ''
+Start-Sleep -Milliseconds 950
+$txtCount = Eval "(() => { const d = $NEWBOARD; return d.layout.order.filter((id) => d.blocks[id].type === 'paragraph').length })()"
+Check '两块文字都落盘了' ([int]$txtCount -eq 2) "n=$txtCount"
+
+Write-Host 'T. 文本块调字号：写进文件，界面也生效'
+$firstText = Eval "(() => { const d = $NEWBOARD; return d.layout.order.find((id) => d.blocks[id].type === 'paragraph') ?? '' })()"
+[void](Eval "(() => { const el = [...document.querySelectorAll('[data-dd-card]')].find((e) => e.dataset.ddCard === '$firstText'); if (!el) return false; el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 })); return true })()")
+Start-Sleep -Milliseconds 380
+$fontMenu = Eval '[...document.querySelectorAll("[role=menuitem]")].map((x) => (x.textContent || "").trim()).join("|")'
+Check '块菜单里有字号选项' ([bool]("$fontMenu" -match '字号')) "menu=$fontMenu"
+Check '点「字号 大」' (MenuItem '字号 大') ''
+Start-Sleep -Milliseconds 1000
+$fs = Eval "(() => { const d = $NEWBOARD; return d.blocks['$firstText'].fontSize ?? 0 })()"
+Check '字号写进了文件（20px）' ([int]$fs -eq 20) "fs=$fs"
+$fsCss = Eval "(() => { const el = [...document.querySelectorAll('[data-dd-card]')].find((e) => e.dataset.ddCard === '$firstText'); const b = el && el.querySelector('[data-dd-card-body]'); return b ? b.style.getPropertyValue('--dd-block-fs') : '' })()"
+Check '卡片上真的用了这个字号' ($fsCss -eq '20px') "css=$fsCss"
+$otherBlocks = Eval "(() => { const d = $NEWBOARD; return d.layout.order.filter((id) => d.blocks[id].type === 'paragraph' && id !== '$firstText').length })()"
+Check '调字号没有动别的块' ([int]$otherBlocks -eq 1) "n=$otherBlocks"
+
+Write-Host 'U. 组合：框选 → 带标题的范围 → 整组拖动 → 解散不删块'
+Key '0' 'Digit0' 48 2
+Start-Sleep -Milliseconds 550
+$bounds = Eval '(() => { const rs=[...document.querySelectorAll("[data-dd-card]")].map((e)=>e.getBoundingClientRect()); if (!rs.length) return ""; const cv=document.querySelector("[data-dd-board-canvas]").getBoundingClientRect(); const x0=Math.max(cv.left+12, Math.min(...rs.map(r=>r.left))-18); const y0=Math.max(cv.top+12, Math.min(...rs.map(r=>r.top))-18); const x1=Math.min(cv.right-12, Math.max(...rs.map(r=>r.right))+18); const y1=Math.min(cv.bottom-12, Math.max(...rs.map(r=>r.bottom))+18); return [x0,y0,x1,y1].map(Math.round).join(",") })()'
+Check '算得出框选范围' ($bounds -ne '') "bounds=$bounds"
+if ($bounds -ne '') {
+  $bv = $bounds.Split(',')
+  DragTo ([double]$bv[0]) ([double]$bv[1]) ([double]$bv[2]) ([double]$bv[3])
+  Start-Sleep -Milliseconds 520
+}
+Check '框选后出现「组合」按钮' ((Num 'document.querySelectorAll("[data-dd-combine]").length') -eq 1) ''
+$combineLabel = Eval 'document.querySelector("[data-dd-combine]")?.textContent.trim() ?? ""'
+Check '按钮写明选了几块' ([bool]("$combineLabel" -match '2')) "label=$combineLabel"
+[void](Eval '(() => { const b = document.querySelector("[data-dd-combine]"); if (!b) return false; b.click(); return true })()')
+Start-Sleep -Milliseconds 1050
+$grp = Eval "(() => { const d = $NEWBOARD; const id = d.layout.order.find((i) => d.blocks[i].type === 'group'); if (!id) return ''; const b = d.blocks[id]; return JSON.stringify({ id: id, title: b.title, n: (b.children||[]).length }) })()"
+Check '文件里多了一个 group 块' ($grp -ne '') "grp=$grp"
+Check '范围有标题' ([bool]("$grp" -match '"title":"[^"]+"')) "grp=$grp"
+Check '范围里装了 2 块' ([bool]("$grp" -match '"n":2')) "grp=$grp"
+Check '画布上画出了范围框' ((Num 'document.querySelectorAll("[data-dd-group]").length') -ge 1) ''
+$grpTitle = Eval 'document.querySelector("[data-dd-group]")?.innerText.trim() ?? ""'
+Check '框上能看到标题文字' ($grpTitle -ne '') "title=$grpTitle"
+Shot 'canvas-group'
+
+$memberBefore = Eval "(() => { const d = $NEWBOARD; const g = d.layout.order.find((i) => d.blocks[i].type === 'group'); if (!g) return ''; return d.blocks[g].children.map((c) => d.layout.pos[c].x).join(',') })()"
+$grip = BoxOf '[data-dd-group-grip]'
+if ($grip -ne '') {
+  $gg = $grip.Split(',')
+  DragTo ([double]$gg[0]) ([double]$gg[1]) ([double]$gg[0] + 60) ([double]$gg[1] + 24)
+  Start-Sleep -Milliseconds 1000
+  $allMoved = Eval "(() => { const d = $NEWBOARD; const g = d.layout.order.find((i) => d.blocks[i].type === 'group'); if (!g) return false; const before = '$memberBefore'.split(',').map(Number); return d.blocks[g].children.every((c, i) => d.layout.pos[c].x > before[i] + 30) })()"
+  Check '拖范围标题，成员一起平移' ([bool]$allMoved) "before=$memberBefore"
+} else {
+  Check '拖范围标题，成员一起平移' $false 'no grip'
+}
+
+Write-Host 'U2. 范围标题可以自己改（标题条上的改名按钮）'
+Check '标题条上有可见的改名按钮' ((Num 'document.querySelectorAll("[data-dd-group-rename]").length') -eq 1) ''
+Check '点改名按钮' ([bool](Eval '(() => { const b = document.querySelector("[data-dd-group-rename]"); if (!b) return false; b.click(); return true })()')) ''
+Start-Sleep -Milliseconds 400
+Check '出现标题输入框' ((Num 'document.querySelectorAll("[data-dd-group-title-input]").length') -eq 1) ''
+[void](Eval '(() => { const el = document.querySelector("[data-dd-group-title-input]"); if (!el) return false; el.focus(); const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value"); setter.set.call(el, "设计稿"); el.dispatchEvent(new Event("input", { bubbles: true })); return true })()')
+Start-Sleep -Milliseconds 220
+Key 'Enter' 'Enter' 13
+Start-Sleep -Milliseconds 1000
+$newTitle = Eval "(() => { const d = $NEWBOARD; const g = d.layout.order.find((i) => d.blocks[i].type === 'group'); return g ? d.blocks[g].title : '' })()"
+Check '新标题写进了文件' ($newTitle -eq '设计稿') "title=$newTitle"
+$grpTitle = Eval 'document.querySelector("[data-dd-group]")?.innerText.trim() ?? ""'
+Check '框上显示的是新标题' ([bool]("$grpTitle" -match '设计稿')) "text=$grpTitle"
+
+# 关掉重开：组还在
+[void](ClickText '笔记.md')
+Start-Sleep -Milliseconds 700
+[void](ClickText '空板')
+Start-Sleep -Milliseconds 1400
+Check '重开后范围框还在（组是存下来的）' ((Num 'document.querySelectorAll("[data-dd-group]").length') -ge 1) ''
+$grpTitle2 = Eval 'document.querySelector("[data-dd-group]")?.innerText.trim() ?? ""'
+Check '重开后标题没丢' ($grpTitle2 -eq $grpTitle) "before=$grpTitle after=$grpTitle2"
+
+[void](Eval "(() => { const el = document.querySelector('[data-dd-group-grip]'); if (!el) return false; el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 })); return true })()")
+Start-Sleep -Milliseconds 380
+Check '范围右键有「解散这个组合」' (MenuItem '解散这个组合') ''
+Start-Sleep -Milliseconds 1000
+$grpAfter = Eval "(() => { const d = $NEWBOARD; return d.layout.order.filter((i) => d.blocks[i].type === 'group').length })()"
+Check '解散后范围没了' ([int]$grpAfter -eq 0) "n=$grpAfter"
+$blocksStay = Eval "(() => { const d = $NEWBOARD; return d.layout.order.filter((i) => d.blocks[i].type === 'paragraph').length })()"
+Check '解散不删块（两块文字还在）' ([int]$blocksStay -eq 2) "n=$blocksStay"
+
+Write-Host 'V. 引用文件：卡片上显示内容，双击直接打开'
+[void](Eval @'
+(() => {
+  const dt = new DataTransfer();
+  dt.setData('text/plain', '笔记.md');
+  const el = document.querySelector('[data-dd-board-canvas]');
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  const at = { clientX: r.right - 320, clientY: r.top + 90 };
+  el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
+  el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
+  return true;
+})()
+'@)
+Start-Sleep -Milliseconds 1150
+$fileBlocks = Eval "(() => { const d = $NEWBOARD; return d.layout.order.filter((i) => d.blocks[i].type === 'file').length })()"
+Check '拖入 md 生成了文件卡片' ([int]$fileBlocks -ge 1) "n=$fileBlocks"
+$prev = Eval 'document.querySelector("[data-dd-file-preview]")?.innerText ?? ""'
+Check '卡片上显示了文件内容' ([bool]("$prev" -match '这是普通笔记')) "prev=$prev"
+Check '文件卡片上有「打开」按钮' ([bool](Eval '[...document.querySelectorAll("[data-dd-board-canvas] button")].some((b) => (b.textContent||"").trim() === "打开")')) ''
+$fileCardId = Eval "(() => { const d = $NEWBOARD; return d.layout.order.find((i) => d.blocks[i].type === 'file') ?? '' })()"
+$fc = BoxOf "[data-dd-card=`"$fileCardId`"]"
+if ($fc -ne '') {
+  $fp = $fc.Split(',')
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$fp[0]; y = [double]$fp[1]; button = 'left'; clickCount = 1; buttons = 1 })
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$fp[0]; y = [double]$fp[1]; button = 'left'; clickCount = 1; buttons = 0 })
+  Start-Sleep -Milliseconds 70
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mousePressed'; x = [double]$fp[0]; y = [double]$fp[1]; button = 'left'; clickCount = 2; buttons = 1 })
+  [void](Send-Cdp 'Input.dispatchMouseEvent' @{ type = 'mouseReleased'; x = [double]$fp[0]; y = [double]$fp[1]; button = 'left'; clickCount = 2; buttons = 0 })
+  Start-Sleep -Milliseconds 1100
+  Check '双击文件卡片直接在文件区打开' (((Num 'document.querySelectorAll("[data-dd-board-canvas]").length') -eq 0) -and ((Num 'document.querySelectorAll(".cm-editor").length') -ge 1)) ''
+} else {
+  Check '双击文件卡片直接在文件区打开' $false 'no file card'
+}
 
 Write-Host 'R. 没有运行时报错'
 $errs = Eval 'window.__errs.join(" | ")'

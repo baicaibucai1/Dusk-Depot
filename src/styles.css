@@ -1493,7 +1493,8 @@ html[data-dd-drop='tree-blank'] [data-drop-zone='tree-blank'] {
   min-height: 1.65em;
   outline: none;
   font-family: var(--dd-font);
-  font-size: var(--dd-fs);
+  /* 块自己的字号优先（白板上可以单独调大调小），没设才用全局 */
+  font-size: var(--dd-block-fs, var(--dd-fs));
   line-height: var(--dd-lh);
   color: var(--color-ink);
   word-break: break-word;
@@ -1603,7 +1604,8 @@ html[data-dd-drop='tree-blank'] [data-drop-zone='tree-blank'] {
  * 为什么：连接锚点浮在卡片外面 2px 起的地方，靠 `group-hover` 才可点。
  * 鼠标从卡片移向锚点时要经过这段"空气"，如果这段不算卡片 hover，
  * 锚点会在半路消失、点不着 —— 用户看到的就是"点不上"。
- * 扩 3px 正好和锚点的命中区接上，中间不留缝；3px 太窄，不影响"点空白取消选中"。
+ * 扩 7px 一直盖到锚点圆心（锚点在边外 6px），鼠标怎么快都不会在中间"漏掉"卡片、
+ * 让锚点瞬间消失。代价是卡片外 7px 内按下去也算拖卡片，太窄，感知不到。
  */
 .dd-board-card::before {
   content: '';
