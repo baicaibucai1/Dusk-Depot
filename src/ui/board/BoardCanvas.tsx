@@ -30,6 +30,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { type Guide, snapBox, unionBox } from '../../core/board/align'
 import {
   type AnchorSide,
   type BoardBlock,
@@ -300,7 +301,14 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   viewRef.current = view
   const [size, setSize] = useState<Size>({ w: 1200, h: 800 })
   const [sizes, setSizes] = useState<Record<string, Size>>({})
-  const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null)
+  /**
+   * 正在拖的东西。**一块和多选共用这一份状态** ——
+   * 原来"拖块"和"拖组"各存一份，组那一路还漏了 memo 依赖，拖起来框在原地不动。
+   * 现在统一成"一批 id + 一个位移"，谁拖都是同一套。
+   */
+  const [drag, setDrag] = useState<{ ids: string[]; dx: number; dy: number } | null>(null)
+  /** 拖动时算出来的对齐参考线（松手就清空） */
+  const [guides, setGuides] = useState<Guide[]>([])
   const [resizing, setResizing] = useState<{ id: string; w?: number; h?: number } | null>(null)
   const [panning, setPanning] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
@@ -321,8 +329,6 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(
     null,
   )
-  /** 正在拖某个组：成员按 (dx,dy) 整体偏移，松手才写盘 */
-  const [groupDrag, setGroupDrag] = useState<{ ids: string[]; dx: number; dy: number } | null>(null)
   /** 就地改组标题：双击组标题条就进这个状态 */
   const [editingGroup, setEditingGroup] = useState<{ id: string; value: string } | null>(null)
   const lastGroupTap = useRef<{ id: string; t: number } | null>(null)
@@ -336,10 +342,9 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
 
   const posNow = useCallback(
     (id: string): Pos => {
-      if (drag?.id === id) return drag.pos
       const base = layout[id] ?? { x: 0, y: 0 }
-      if (groupDrag?.ids.includes(id)) {
-        return { ...base, x: Math.round(base.x + groupDrag.dx), y: Math.round(base.y + groupDrag.dy) }
+      if (drag?.ids.includes(id)) {
+        return { ...base, x: Math.round(base.x + drag.dx), y: Math.round(base.y + drag.dy) }
       }
       if (resizing?.id === id) {
         const live: Pos = { ...base }
@@ -633,62 +638,78 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
     window.addEventListener('pointerup', up)
   }
 
-  /** 拖组标题：整组一起走，松手才落一次盘 */
-  const beginGroupDrag = (e: React.PointerEvent, ids: string[]) => {
+  /**
+   * 拖动：一块、多选的一批、或一个组的成员，都走这里。
+   *
+   * 顺序不能反：
+   *   ① 原始位移（屏幕像素按缩放折算回世界坐标）；
+   *   ② 拿"这一批的包围盒"去跟其它块对齐，算出吸附量（按住 Alt 临时关掉）；
+   *   ③ 位移 + 吸附量一起下发；松手才写一次盘（拖动过程中不进历史）。
+   *
+   * `ids` 由调用方给：拖卡片时是"这一块或整个选区"，拖组标题条时是成员表。
+   */
+  const startDrag = (e: React.PointerEvent, ids: string[]) => {
     if (e.button !== 0) return
+    const boxes = ids
+      .map((x) => rectsRef.current[x])
+      .filter((r): r is Rect => Boolean(r))
+    const area = unionBox(boxes)
+    if (!area) return
     e.preventDefault()
     e.stopPropagation()
-    const z = view.z
-    const start = { x: e.clientX, y: e.clientY }
-    let last = { dx: 0, dy: 0 }
-    document.body.style.userSelect = 'none'
-    const move = (ev: PointerEvent) => {
-      last = {
-        dx: Math.round((ev.clientX - start.x) / z),
-        dy: Math.round((ev.clientY - start.y) / z),
-      }
-      setGroupDrag({ ids, ...last })
-    }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      document.body.style.userSelect = ''
-      setGroupDrag(null)
-      if (last.dx || last.dy) props.onMoveMany(ids, last.dx, last.dy)
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
+    // 对齐的对象是"不在这一批里"的块 —— 含自己就会吸回原位，怎么拖都弹回去
+    const others = Object.entries(rectsRef.current)
+      .filter(([k]) => !ids.includes(k))
+      .map(([, r]) => r)
 
-  const beginDrag = (e: React.PointerEvent, id: string) => {
-    if (e.button !== 0) return
-    const base = layout[id]
-    if (!base) return
-    e.preventDefault()
-    e.stopPropagation()
-    props.onSelect(id)
     const z = view.z
-    const start = { x: e.clientX, y: e.clientY }
-    let last = { x: base.x, y: base.y }
+    const from = { x: e.clientX, y: e.clientY }
+    let last = { dx: 0, dy: 0 }
     let moved = false
     document.body.style.userSelect = 'none'
     const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - start.x
-      const dy = ev.clientY - start.y
-      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return
+      const px = ev.clientX - from.x
+      const py = ev.clientY - from.y
+      if (!moved && Math.abs(px) + Math.abs(py) < 3) return
       moved = true
-      last = { x: Math.round(base.x + dx / z), y: Math.round(base.y + dy / z) }
-      setDrag({ id, pos: { ...base, x: last.x, y: last.y } })
+      let dx = Math.round(px / z)
+      let dy = Math.round(py / z)
+      let next: Guide[] = []
+      if (!ev.altKey) {
+        // 容差按屏幕像素给：缩小看全局时，也不会"离着老远就被吸走"
+        const snap = snapBox({ ...area, x: area.x + dx, y: area.y + dy }, others, 6 / z)
+        dx += snap.dx
+        dy += snap.dy
+        next = snap.guides
+      }
+      last = { dx, dy }
+      setDrag({ ids, dx, dy })
+      setGuides(next)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       document.body.style.userSelect = ''
       setDrag(null)
-      if (moved) props.onMove(id, { ...base, x: last.x, y: last.y })
+      setGuides([])
+      if (moved && (last.dx || last.dy)) props.onMoveMany(ids, last.dx, last.dy)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+  }
+
+  /** 拖卡片：已经框选了好几张时，拖其中任意一张 = 整批一起走 */
+  const beginDrag = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return
+    if (!layout[id]) return
+    props.onSelect(id)
+    startDrag(e, multi.length > 1 && multi.includes(id) ? multi : [id])
+  }
+
+  /** 拖组标题条：整组一起走 */
+  const beginGroupDrag = (e: React.PointerEvent, ids: string[]) => {
+    if (e.button !== 0) return
+    startDrag(e, ids)
   }
 
   /**
@@ -1211,7 +1232,7 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
                 linkPick={Boolean(linkPick)}
                 hot={wire?.over === id}
                 focusId={focusId}
-                dragging={drag?.id === id}
+                dragging={Boolean(drag?.ids.includes(id))}
                 resizing={resizing?.id === id}
                 onSelect={props.onSelect}
                 onToggleMulti={(bid) => {
@@ -1251,6 +1272,54 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(pro
               />
             )
           })}
+
+          {/*
+            对齐参考线：拖动时把"真的对上了"的那条边串起来，松手就没。
+            画在卡片上面（z-35）—— 线被卡片压住就看不见自己在跟谁对齐了。
+          */}
+          {guides.length > 0 ? (
+            <svg
+              aria-hidden
+              data-dd-board-guides
+              className="pointer-events-none absolute top-0 left-0 z-[35] overflow-visible"
+              width="1"
+              height="1"
+            >
+              {guides.map((g) => {
+                // 线头往两头各伸一点：贴着卡片边缘时也看得出这是一条线，不是那条边本身
+                const pad = 10 / view.z
+                const from = g.from - pad
+                const to = g.to + pad
+                const common = {
+                  stroke: 'var(--color-green)',
+                  strokeWidth: 1,
+                  // 中线比边线更淡：边线是"我要贴住它"，中线只是"顺手对一下"
+                  strokeOpacity: g.kind === 'center' ? 0.5 : 0.85,
+                  strokeDasharray: g.kind === 'center' ? '5 4' : undefined,
+                  vectorEffect: 'non-scaling-stroke' as const,
+                }
+                return g.axis === 'x' ? (
+                  <line
+                    key={`x-${g.at}`}
+                    x1={g.at}
+                    x2={g.at}
+                    y1={from}
+                    y2={to}
+                    {...common}
+                  />
+                ) : (
+                  <line
+                    key={`y-${g.at}`}
+                    x1={from}
+                    x2={to}
+                    y1={g.at}
+                    y2={g.at}
+                    {...common}
+                  />
+                )
+              })}
+            </svg>
+          ) : null}
 
           {/* 正在拖的那条线画在所有卡片之上 —— 手指压着卡片时，线不该被卡片盖住 */}
           {wire && wireStart && wireEnd ? (

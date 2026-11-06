@@ -652,15 +652,37 @@ export function insertBlock(doc: BoardFileDoc, afterId: string | null, block: Bo
   }
 }
 
+/**
+ * 删一块。
+ *
+ * 顺手清理两类"指向已不存在的东西"：
+ *   · 挂在它身上的连接；
+ *   · 组合成员表里的 id —— 留着的话，界面上组框会按一个不存在的块算包围盒，
+ *     而且下次谁把这个 id 用回去，它就会莫名其妙重新出现在组里。
+ * 组里一块都不剩了就**连框一起收掉**：空组在画布上没有大小，点不到也删不掉，留着只会变成隐形垃圾。
+ */
 export function removeBlock(doc: BoardFileDoc, id: string): BoardFileDoc {
   const blocks = { ...doc.blocks }
+  const gone = new Set<string>([id])
   delete blocks[id]
+
+  for (const [gid, b] of Object.entries(blocks)) {
+    if (b.type !== 'group' || !b.children?.includes(id)) continue
+    const left = b.children.filter((x) => x !== id)
+    if (left.length === 0) {
+      gone.add(gid)
+      delete blocks[gid]
+    } else {
+      blocks[gid] = { ...b, children: left }
+    }
+  }
+
   const pos = { ...(doc.layout.pos ?? {}) }
-  delete pos[id]
+  for (const x of gone) delete pos[x]
 
   const layout: BoardLayout = {
     mode: doc.layout.mode,
-    order: doc.layout.order.filter((x) => x !== id),
+    order: doc.layout.order.filter((x) => !gone.has(x)),
   }
   if (Object.keys(pos).length > 0) layout.pos = pos
 
@@ -669,7 +691,7 @@ export function removeBlock(doc: BoardFileDoc, id: string): BoardFileDoc {
     blocks,
     layout,
     // 块没了，挂在它身上的连接一起收掉（连接不能指向空气）
-    links: doc.links.filter((l) => l.from !== id && l.to !== id),
+    links: doc.links.filter((l) => !gone.has(l.from) && !gone.has(l.to)),
   }
 }
 

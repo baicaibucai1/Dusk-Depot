@@ -685,4 +685,28 @@ describe('组块与字号', () => {
     expect(Object.keys(after.blocks).sort()).toEqual(['n1', 'n2'])
     expect(after.layout.order).toEqual(['n1', 'n2'])
   })
+
+  it('删掉组里的块：成员表里跟着摘掉，不留悬空 id', () => {
+    let doc = newBoardFile('t')
+    doc = insertBlock(doc, null, newBlock('paragraph', 'n1'))
+    doc = insertBlock(doc, 'n1', newBlock('paragraph', 'n2'))
+    doc = insertBlock(doc, 'n2', { ...newBlock('group', 'g1'), children: ['n1', 'n2'] })
+    const after = removeBlock(doc, 'n1')
+    expect(after.blocks.g1?.children).toEqual(['n2'])
+    expect(after.blocks.g1).toBeDefined()
+  })
+
+  it('组里最后一块被删掉：空框一起收掉（空组在画布上没有大小，点不到也删不掉）', () => {
+    let doc = newBoardFile('t')
+    doc = insertBlock(doc, null, newBlock('paragraph', 'n1'))
+    doc = insertBlock(doc, 'n1', { ...newBlock('group', 'g1'), children: ['n1'] })
+    doc = setPos(doc, 'g1', { x: 0, y: 0 })
+    doc = addLink(doc, { id: 'l1', from: 'n1', to: 'g1', type: 'related', label: '', createdAt: 1 })
+    const after = removeBlock(doc, 'n1')
+    expect(after.blocks.g1).toBeUndefined()
+    expect(Object.keys(after.blocks)).toEqual([])
+    expect(after.layout.order).toEqual([])
+    expect(after.layout.pos?.g1).toBeUndefined()
+    expect(after.links).toEqual([])
+  })
 })
